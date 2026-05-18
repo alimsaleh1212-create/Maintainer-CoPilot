@@ -1,0 +1,4 @@
+bug:open:44 | close:1378
+docs: open:0 | close:299
+enhancement [feature]: open:33 | close:2227
+questions: open:0 | closed:0

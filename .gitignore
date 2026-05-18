@@ -1,0 +1,71 @@
+# --- Environment & secrets ---------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+service-account*.json
+vault-token
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.python-version-local
+pip-wheel-metadata/
+
+# --- uv ----------------------------------------------------------------------
+.uv-cache/
+
+# --- Testing & coverage ------------------------------------------------------
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+*.cover
+
+# --- Node / Vite -------------------------------------------------------------
+node_modules/
+frontend/widget/dist/
+frontend/widget/.vite/
+*.tsbuildinfo
+
+# --- IDE / editor ------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- OS ----------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+
+# --- Logs --------------------------------------------------------------------
+*.log
+logs/
+
+# --- Local data / artifacts --------------------------------------------------
+# MinIO data, downloaded datasets, trained model artifacts stay out of git
+data/
+artifacts/
+.minio-data/
+.postgres-data/
+.redis-data/
+.vault-data/
+*.ckpt
+*.pt
+*.safetensors
+
+# --- Local Alembic ----------------------------------------------------------
+# Keep migrations under backend/alembic/versions, but ignore any local SQL dumps
+*.sql.bak

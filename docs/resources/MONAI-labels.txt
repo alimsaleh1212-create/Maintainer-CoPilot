@@ -1,0 +1,4 @@
+bug:open:32 | close:337
+documentation: open:5 | close:28
+questions: open:3 | close:250
+feature request: open:142 | close:535
