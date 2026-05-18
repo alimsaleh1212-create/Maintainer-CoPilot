@@ -1,0 +1,217 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: copilot
+      POSTGRES_USER: copilot
+      POSTGRES_PASSWORD: copilot  # dev-only; prod reads from Vault
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U copilot -d copilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin     # dev-only; prod reads from Vault
+      MINIO_ROOT_PASSWORD: minioadmin # dev-only; prod reads from Vault
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+
+  vault:
+    image: hashicorp/vault:latest
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "${VAULT_ROOT_TOKEN}"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "${VAULT_PORT:-8200}:8200"
+
+  langfuse:
+    image: langfuse/langfuse:latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://copilot:copilot@db:5432/langfuse
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3000}
+      NEXTAUTH_SECRET: dev-nextauth-secret
+      SALT: dev-salt
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/public/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+
+  # ---------------------------------------------------------------------------
+  # Migration (runs once, exits before api boots)
+  # ---------------------------------------------------------------------------
+  migrate:
+    build:
+      context: ../backend
+      dockerfile: ../docker/api.Dockerfile
+      target: runtime
+    command: ["uv", "run", "alembic", "upgrade", "head"]
+    environment:
+      VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
+      VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
+    depends_on:
+      db:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Backend services
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ../backend
+      dockerfile: ../docker/api.Dockerfile
+      target: runtime
+    command: ["uv", "run", "uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
+      VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  model-server:
+    build:
+      context: ../backend
+      dockerfile: ../docker/model_server.Dockerfile
+    command: ["uv", "run", "uvicorn", "model_server.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
+      VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
+    depends_on:
+      vault:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    ports:
+      - "${MODEL_SERVER_PORT:-8001}:8001"
+
+  # ---------------------------------------------------------------------------
+  # Frontend services
+  # ---------------------------------------------------------------------------
+  chatbot:
+    build:
+      context: ../frontend/streamlit_ui
+      dockerfile: ../../docker/streamlit.Dockerfile
+    command: ["uv", "run", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    environment:
+      API_BASE_URL: "http://api:8000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+
+  widget:
+    build:
+      context: ../frontend/widget
+      dockerfile: ../../docker/widget.Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "${WIDGET_PORT:-8081}:80"
+
+  host-allowed:
+    build:
+      context: ../frontend/demo_host
+      dockerfile: ../../docker/host.Dockerfile
+    environment:
+      HOST_TYPE: allowed
+    depends_on:
+      widget:
+        condition: service_healthy
+    ports:
+      - "${HOST_PORT_ALLOWED:-8090}:80"
+
+  host-disallowed:
+    build:
+      context: ../frontend/demo_host
+      dockerfile: ../../docker/host.Dockerfile
+    environment:
+      HOST_TYPE: disallowed
+    depends_on:
+      widget:
+        condition: service_healthy
+    ports:
+      - "${HOST_PORT_DISALLOWED:-8091}:80"
+
+volumes:
+  pg_data:
+  minio_data:

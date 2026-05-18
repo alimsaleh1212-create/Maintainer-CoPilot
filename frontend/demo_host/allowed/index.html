@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maintainer's Copilot — Allowed Host Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #f8fafc; }
+    h1 { color: #1e293b; }
+    p { color: #475569; }
+  </style>
+</head>
+<body>
+  <h1>Allowed Host (port 8090)</h1>
+  <p>This origin is listed in the widget's <code>allowed_origins</code> field.
+     The widget should load and allow chat.</p>
+
+  <!--
+    Replace data-widget-id with the real widget ID from the admin panel.
+    The API host must match where your backend is running.
+  -->
+  <script
+    src="http://localhost:8000/widget.js"
+    data-widget-id="REPLACE_WITH_WIDGET_ID"
+    data-api-host="http://localhost:8000"
+    async
+  ></script>
+</body>
+</html>
