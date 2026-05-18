@@ -1,0 +1,76 @@
+# Pre-commit pipeline per CLAUDE.md:
+#   uv run ruff format → uv run ruff check → uv run mypy --strict → pytest -q -m "not eval" → gitleaks
+#
+# Never skip these. Never pass --no-verify. If a hook fails, fix the cause.
+
+repos:
+  # --- Generic hygiene -------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: detect-private-key
+
+  # --- Ruff: format + lint (backend) -----------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.13
+    hooks:
+      - id: ruff-format
+        files: ^backend/
+      - id: ruff
+        files: ^backend/
+        args: ["--fix"]
+
+  # --- Ruff: format + lint (frontend/streamlit_ui) ---------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.13
+    hooks:
+      - id: ruff-format
+        alias: ruff-format-streamlit
+        files: ^frontend/streamlit_ui/
+      - id: ruff
+        alias: ruff-streamlit
+        files: ^frontend/streamlit_ui/
+        args: ["--fix"]
+
+  # --- mypy --strict via the uv-managed env (backend) ------------------------
+  - repo: local
+    hooks:
+      - id: mypy-backend
+        name: mypy --strict (backend)
+        language: system
+        entry: bash -c 'cd backend && uv run mypy app/'
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+  # --- mypy --strict via the uv-managed env (streamlit_ui) -------------------
+  - repo: local
+    hooks:
+      - id: mypy-streamlit
+        name: mypy --strict (streamlit_ui)
+        language: system
+        entry: bash -c 'cd frontend/streamlit_ui && uv run mypy .'
+        files: ^frontend/streamlit_ui/.*\.py$
+        pass_filenames: false
+
+  # --- Fast tests (skip slow eval suite at commit time) ----------------------
+  - repo: local
+    hooks:
+      - id: pytest-backend
+        name: pytest (backend, fast tests only)
+        language: system
+        entry: bash -c 'cd backend && uv run pytest -q'
+        files: ^backend/.*\.py$
+        pass_filenames: false
+
+  # --- Secret scanning -------------------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks

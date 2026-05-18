@@ -1,0 +1,47 @@
+[project]
+name = "maintainers-copilot-streamlit-ui"
+version = "0.1.0"
+description = "Streamlit internal UI for the Maintainer's Copilot (auth, admin, memory inspector, chat)"
+requires-python = ">=3.12,<3.13"
+readme = "../../README.md"
+dependencies = [
+    # Runtime deps land as features are built (uv add ...).
+    # streamlit / httpx / pydantic will be added on Day THU when the UI takes shape.
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pytest>=8.3.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
