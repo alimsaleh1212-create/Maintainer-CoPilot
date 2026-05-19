@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from app.api.exceptions import add_exception_handlers
 from app.api.routes import health
 from app.config import Settings, get_settings
+from app.infra.redaction import structlog_redaction_processor
 from app.infra.vault import VaultSecretMissing, VaultUnreachable
 
 logger = structlog.get_logger(__name__)
@@ -41,6 +42,7 @@ def _configure_logging(log_level: str) -> None:
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            structlog_redaction_processor,   # scrub secrets before any emission
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
