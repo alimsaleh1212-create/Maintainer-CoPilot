@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-19
 **Branch:** `feature/foundations-skeleton`
-**Status:** complete — ruff clean, mypy clean (24 src files), 35/35 tests pass
+**Status:** complete (updated to include three-way comparison) — ruff clean, mypy clean (24 src files), 35/35 tests pass
 
 ## Why this refactor
 Training is offline; inference is online. The cleanest boundary is `model_card.json` — the only artefact that crosses the wall. Pulling the training pipeline into the repo created Python-import coupling between Colab and the backend, which the user (rightly) flagged as risky. This step moves *all* training-side logic into a single self-contained Colab notebook and trims the backend to inference-only.
@@ -10,7 +10,14 @@ Training is offline; inference is online. The cleanest boundary is `model_card.j
 ## What changed
 
 ### Added
-- `backend/notebooks/train_classifier_colab.ipynb` — 22-cell end-to-end DL workflow: setup → mount Drive → fetch MONAI issues → 4→3 label merge with shown counts → time-aware stratified split → tokenize → train (DistilBERT + EarlyStopping + fp16) → write `model_card.json` with SHA-256 → zip+copy to Drive → **round-trip verify** (re-runs the exact checks `load_classifier()` performs at boot)
+- `backend/notebooks/train_classifier_colab.ipynb` — 30-cell end-to-end DL+comparison workflow:
+  - **Sections 0–6:** setup → mount Drive → fetch MONAI issues → 4→3 label merge with counts → time-aware stratified split → tokenize → train (DistilBERT + EarlyStopping + fp16) → write `model_card.json` with SHA-256
+  - **Section 6a:** evaluate DistilBERT on test split (accuracy, macro-F1, per-class F1, confusion matrix, avg latency)
+  - **Section 6b:** classical ML baseline — TF-IDF bigrams + LogisticRegression (same test split); pickled pipeline saved for reproducibility audit
+  - **Section 6c:** LLM baseline — `gemini-2.0-flash` 5-shot per class (15 examples in context); `GEMINI_API_KEY` from Colab secrets; evaluates on configurable sample (default 100) to control cost; records accuracy, F1, latency, $/1K
+  - **Section 6d:** three-way comparison table → deployment winner by macro-F1 → writes `eval_report.json` with metrics for all models, winner rationale, threshold pass/fail
+  - **Section 7:** zip+copy to Drive, including `eval_report.json` alongside the model artifacts
+  - **Section 8:** round-trip verify — re-runs the exact checks `load_classifier()` performs at boot
 
 ### Refactored
 - `app/domain/issue.py` — trimmed 102 → 22 lines. Kept only `CLASS_NAMES` and `CLASS_TO_IDX`; introduced `ClassLabel = Literal["bug","feature","support"]` so the type system enforces the class contract statically. Removed `RawIssue`, `LabeledIssue`, `LABEL_MAP`, `resolve_label`, `build_labeled_issue` (training-only — they live in the notebook now).
@@ -46,4 +53,4 @@ pytest -q     → 35 passed, 1 deselected
 ```
 
 ## What's next
-TUE: classical ML baseline + LLM baseline + three-way comparison + `/classify` endpoint + NER + summarizer. All three baselines are evaluated in the same notebook (or a sibling eval notebook); the backend just loads the winner.
+TUE: model-server (FastAPI inference container) + `/classify` endpoint + NER endpoint + summarizer endpoint + classification golden set (25 hand-curated) + `eval/run_classification_eval.py` (loads `eval_report.json` from MinIO and gates CI on thresholds). The three-way comparison is complete in the notebook; the backend just deploys the winner from `model_card.json`.
