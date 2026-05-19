@@ -202,6 +202,19 @@ Passing all 13 = ready to ship.
 
 ---
 
+## Step completion reports (mandatory)
+
+After every step is committed, write a brief Markdown report to `docs/reports/YYYY-MM-DD-<step-slug>.md` **without being asked**. The report must contain:
+
+1. **What was built** — files created/modified and their purpose (2–4 bullet points).
+2. **Tests written** — list each test file and what it asserts.
+3. **Checks run** — ruff, mypy, pytest results.
+4. **What's next** — one sentence naming the next step.
+
+Keep it under 40 lines. Commit the report in the same commit as the step, or in a follow-up `docs:` commit immediately after. Never skip this.
+
+---
+
 ## Submission
 
 Tag `v0.1.0-week7`. Public repo. `docker-compose up` succeeds from a fresh clone after `cp .env.example .env` and pasting the Vault root token. Both eval suites pass in CI.
