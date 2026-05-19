@@ -1,7 +1,9 @@
 """Unit tests for classifier loader — refuse-to-boot behaviour.
 
 These tests do NOT load a real model. They verify that ClassifierLoadError
-is raised on all the failure conditions that trigger refuse-to-boot.
+is raised on all the failure conditions that trigger refuse-to-boot, including
+the class-set drift check that asserts the deployed model's class space
+matches the backend's compile-time contract.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from app.ml.classifier import ClassifierLoadError, load_classifier
+
+VALID_CLASSES = ["bug", "feature", "support"]
 
 
 @pytest.fixture()
@@ -38,9 +42,45 @@ class TestLoadClassifierRefusal:
         with pytest.raises(ClassifierLoadError, match="malformed"):
             load_classifier(model_dir)
 
-    def test_model_card_without_sha256_raises(self, model_dir: Path) -> None:
+    def test_model_card_without_classes_raises(self, model_dir: Path) -> None:
         model_dir.mkdir()
         (model_dir / "model_card.json").write_text(json.dumps({"version": "1.0.0"}))
+        (model_dir / "pytorch_model.bin").write_bytes(b"fake")
+        with pytest.raises(ClassifierLoadError, match="no classes field"):
+            load_classifier(model_dir)
+
+    def test_class_set_drift_raises(self, model_dir: Path) -> None:
+        """Trained for 4 classes but backend contract is 3 → refuse to boot."""
+        model_dir.mkdir()
+        card = {
+            "version": "1.0.0",
+            "classes": ["bug", "feature", "support", "documentation"],
+            "model_sha256": "sha256:anything",
+            "hyperparameters": {"max_length": 512},
+        }
+        (model_dir / "model_card.json").write_text(json.dumps(card))
+        (model_dir / "pytorch_model.bin").write_bytes(b"fake")
+        with pytest.raises(ClassifierLoadError, match="Class-set drift"):
+            load_classifier(model_dir)
+
+    def test_class_order_drift_raises(self, model_dir: Path) -> None:
+        """Same classes but reordered → refuse to boot (index mapping changes)."""
+        model_dir.mkdir()
+        card = {
+            "version": "1.0.0",
+            "classes": ["feature", "bug", "support"],  # bug↔feature swapped
+            "model_sha256": "sha256:anything",
+            "hyperparameters": {"max_length": 512},
+        }
+        (model_dir / "model_card.json").write_text(json.dumps(card))
+        (model_dir / "pytorch_model.bin").write_bytes(b"fake")
+        with pytest.raises(ClassifierLoadError, match="Class-set drift"):
+            load_classifier(model_dir)
+
+    def test_model_card_without_sha256_raises(self, model_dir: Path) -> None:
+        model_dir.mkdir()
+        card = {"version": "1.0.0", "classes": VALID_CLASSES}
+        (model_dir / "model_card.json").write_text(json.dumps(card))
         (model_dir / "pytorch_model.bin").write_bytes(b"fake")
         with pytest.raises(ClassifierLoadError, match="model_sha256"):
             load_classifier(model_dir)
@@ -51,6 +91,7 @@ class TestLoadClassifierRefusal:
         weight_file.write_bytes(b"real weights content")
         card = {
             "version": "1.0.0",
+            "classes": VALID_CLASSES,
             "model_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "hyperparameters": {"max_length": 512},
         }
@@ -62,6 +103,7 @@ class TestLoadClassifierRefusal:
         model_dir.mkdir()
         card = {
             "version": "1.0.0",
+            "classes": VALID_CLASSES,
             "model_sha256": "sha256:anything",
             "hyperparameters": {"max_length": 512},
         }

@@ -5,11 +5,8 @@ description = "Maintainer's Copilot backend — FastAPI service, model server, R
 requires-python = ">=3.12,<3.13"
 readme = "../README.md"
 dependencies = [
-    "accelerate>=1.13.0",
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
-    "datasets>=4.8.5",
-    "evaluate>=0.4.6",
     "fastapi>=0.136.1",
     # Runtime deps land as features are built (uv add ...).
     # MON Step 1 keeps this empty so the scaffold installs in seconds and
@@ -19,7 +16,6 @@ dependencies = [
     "pgvector>=0.4.2",
     "pydantic>=2.13.4",
     "redis[hiredis]>=7.4.0",
-    "scikit-learn>=1.8.0",
     "sqlalchemy[asyncio]>=2.0.49",
     "structlog>=25.5.0",
     "torch>=2.12.0",
@@ -39,7 +35,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["alembic/versions"]
+extend-exclude = ["alembic/versions", "notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
