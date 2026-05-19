@@ -8,6 +8,8 @@ dependencies = [
     # Runtime deps land as features are built (uv add ...).
     # MON Step 1 keeps this empty so the scaffold installs in seconds and
     # we add deps deliberately, with each commit, alongside the code that uses them.
+    "hvac>=2.4.0",
+    "pydantic>=2.13.4",
 ]
 
 [dependency-groups]
