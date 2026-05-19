@@ -1,0 +1,12 @@
+# Eval thresholds — any value at 0 / disabled causes the API to refuse to boot.
+# Update only via a dedicated PR with eval_report.json diff attached.
+# Placeholders before first training run; tighten after TUE eval.
+
+classification:
+  macro_f1: 0.78          # macro-averaged F1 across bug/feature/support
+  per_class_f1_min: 0.70  # every individual class must beat this floor
+
+rag:
+  faithfulness: 0.85      # RAGAS faithfulness on golden_rag.jsonl
+  answer_relevancy: 0.80  # RAGAS answer_relevancy
+  hit_at_5: 0.70          # retrieval Hit@5 on golden_rag.jsonl

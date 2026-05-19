@@ -18,6 +18,8 @@ dependencies = [
     "redis[hiredis]>=7.4.0",
     "sqlalchemy[asyncio]>=2.0.49",
     "structlog>=25.5.0",
+    "torch>=2.12.0",
+    "transformers>=5.8.1",
     "uvicorn[standard]>=0.47.0",
 ]
 
@@ -33,7 +35,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["alembic/versions"]
+extend-exclude = ["alembic/versions", "notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
