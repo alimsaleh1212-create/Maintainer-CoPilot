@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Maintainer's Copilot — Disallowed Host Demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #fff1f2; }
+    h1 { color: #9f1239; }
+    p { color: #475569; }
+  </style>
+</head>
+<body>
+  <h1>Disallowed Host (port 8091)</h1>
+  <p>This origin is <strong>NOT</strong> listed in the widget's <code>allowed_origins</code> field.
+     The browser should block the iframe via <code>Content-Security-Policy: frame-ancestors</code>
+     and the widget must not render.</p>
+
+  <script
+    src="http://localhost:8000/widget.js"
+    data-widget-id="REPLACE_WITH_WIDGET_ID"
+    data-api-host="http://localhost:8000"
+    async
+  ></script>
+</body>
+</html>

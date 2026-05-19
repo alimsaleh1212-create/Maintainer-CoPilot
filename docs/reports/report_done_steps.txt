@@ -1,0 +1,50 @@
+Step 1 complete. Two clean commits on the right branches:
+
+
+e71cbfa  (feature/foundations-skeleton) chore(scaffold): create backend/frontend/docker layout and uv projects
+3e2b927  (main)                          chore: initialize repo with plan and guidelines
+Test gate green in both Python projects:
+
+Gate	backend/	frontend/streamlit_ui/
+uv run ruff check	✓ all checks passed	✓ all checks passed
+uv run ruff format --check	✓ 18 files formatted	✓ 4 files formatted
+uv run mypy --strict	✓ 11 source files clean	✓ 4 source files clean
+uv run pytest	✓ 1 smoke test passed	✓ 1 smoke test passed
+Notable decisions I made along the way (call out if you want anything changed):
+
+Runtime deps are empty in both pyproject.tomls. Each dep gets added via uv add in the same commit as the code that uses it — keeps the lockfile honest and reviewers can see why every dep is there. We'll uv add fastapi pydantic ... on Step 2.
+backend/uv.lock is committed (33 KB) — satisfies the bootcamp "use a lockfile" rule.
+Smoke tests verify every subpackage imports. Cheap, catches future __init__.py removal or import-time errors before any other test runs.
+pytest config defaults to -m 'not eval and not integration' so local runs are fast; CI passes -m eval and -m integration explicitly.
+.pre-commit-config.yaml mirrors CLAUDE.md's pipeline exactly, including separate ruff hooks for backend vs streamlit_ui (so a streamlit-only change doesn't run backend hooks).
+Two ignore files committed first, before any code. .venv/ was excluded by .gitignore as designed — no virtualenv crept into git.
+What's next per PLAN.md MON: Step 2 is docker/docker-compose.yml + the per-service Dockerfiles + the migrate container wiring. Say "step 2" (or "compose") when you're ready.
+
+--------------------
+
+MON Step 2 is done. Here's what was created:
+
+docker/docker-compose.yml — 12 services with correct dependency ordering:
+
+migrate waits for db (healthcheck) + vault → runs alembic upgrade head and exits
+api waits for migrate: service_completed_successfully + redis + minio + vault
+chatbot/model-server/widget wait for api healthy
+host-allowed + host-disallowed share one image, differ only by HOST_TYPE env var (selects which index.html nginx serves)
+Dockerfiles — all use the uv sync --frozen --no-dev pattern with a cached deps layer. host.Dockerfile uses a runtime entrypoint script that writes the nginx server block from HOST_TYPE at container start.
+
+Next step is MON Step 3: Vault adapter (backend/app/infra/vault.py) — the boot-time secret resolver that makes the app refuse to start if Vault is unreachable. Ready when you are.
+
+------------------------
+
+MON Steps 3+4 done. Here's what was built:
+
+app/infra/vault.py — VaultClient (frozen dataclass) does one KV-v2 read at startup and maps it to the 8 required secrets. Three distinct failure modes: VaultUnreachable (network/auth), VaultSecretMissing (path doesn't exist or a key is absent). The health_check() + resolve_all() separation lets the lifespan handler give a clear error message for each failure.
+
+app/config.py — Settings(BaseModel, extra="forbid") with all required fields typed. get_settings() is lru_cache'd so Vault is hit once per process. get_settings.cache_clear() resets it between test cases. All os.getenv calls are confined to this file.
+
+scripts/seed_vault.py — one-shot CLI to populate the KV-v2 path in dev-mode Vault before first boot.
+
+Next is MON Step 5: FastAPI lifespan (app/api/main.py) — builds singletons on app.state and enforces the refuse-to-boot policy. Ready when you are.
+
+--------------------
+

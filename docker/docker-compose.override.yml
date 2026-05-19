@@ -1,0 +1,34 @@
+# Local-dev overrides — NOT committed to production deploys.
+# Adds bind mounts for hot-reload and exposes extra debug ports.
+
+services:
+  api:
+    volumes:
+      - ../backend:/app
+    command:
+      - uv
+      - run
+      - uvicorn
+      - app.api.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+
+  model-server:
+    volumes:
+      - ../backend:/app
+
+  chatbot:
+    volumes:
+      - ../frontend/streamlit_ui:/app
+    command:
+      - uv
+      - run
+      - streamlit
+      - run
+      - app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.runOnSave=true
