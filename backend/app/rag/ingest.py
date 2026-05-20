@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 from datetime import datetime
-from pathlib import Path
+from typing import Any
 
-import httpx
 import structlog
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.domain.rag_chunk import RagChunkCreate
+from app.models import RagChunk
+from app.rag.chunking import MarkdownChunker
+from app.rag.embeddings import EmbeddingModel
 
 logger = structlog.get_logger(__name__)
 
@@ -16,110 +22,248 @@ class CorpusIngestor:
     """Ingest MONAI docs and issues into pgvector corpus.
 
     Sources:
-    1. MONAI docs (markdown files from repo)
-    2. Resolved MONAI issues (NOT in training split)
+    1. Static markdown files (documentation)
+    2. GitHub issues (resolved, from outside training set)
     """
 
-    def __init__(
-        self,
-        repo_root: Path | str = "/home/user/workplace/aie_sef_bootcamp/project7",
-    ):
-        self.repo_root = Path(repo_root)
-        self.github_token = None  # From Vault
+    def __init__(self) -> None:
+        self.chunker = MarkdownChunker()
 
     async def ingest_docs(
         self,
-        docs_source: str = "local",  # "local" or "github"
-        chunker=None,
-        embedder=None,
-        db_session=None,
+        docs: list[tuple[str, str]],  # [(title, content), ...]
+        embedder: EmbeddingModel,
+        db_session: AsyncSession,
     ) -> dict[str, int]:
         """Ingest documentation files.
 
         Args:
-            docs_source: Where to pull docs from ("local" or "github")
-            chunker: MarkdownChunker instance
+            docs: List of (title, content) tuples
             embedder: EmbeddingModel instance
-            db_session: SQLAlchemy session to store chunks
+            db_session: SQLAlchemy async session
 
         Returns:
             Ingestion stats: {docs_count, chunks_count, errors_count}
         """
-        logger.info("corpus_ingest.docs_start", source=docs_source)
+        logger.info("corpus_ingest.docs_start", docs_count=len(docs))
 
         stats = {"docs_count": 0, "chunks_count": 0, "errors_count": 0}
 
-        # TODO: Implement doc fetching
-        # 1. If "local": find .md files in MONAI repo
-        # 2. If "github": fetch from GitHub raw content
-        # 3. For each doc:
-        #    - Chunk with MarkdownChunker
-        #    - Embed chunks with EmbeddingModel
-        #    - Insert into rag_chunks table with pgvector
+        for title, content in docs:
+            try:
+                # Chunk the document
+                chunks = self.chunker.chunk(content, source=title)
 
-        logger.info(
-            "corpus_ingest.docs_placeholder",
-            source=docs_source,
-        )
+                for chunk in chunks:
+                    try:
+                        # Embed the chunk
+                        embedding = await embedder.embed(chunk.text)
+
+                        # Create tsvector content
+                        tsvector_text = f"{chunk.text} {title}"
+
+                        # Create record
+                        chunk_id = self._generate_chunk_id(title, chunk.text)
+                        chunk_create = RagChunkCreate(
+                            chunk_id=chunk_id,
+                            text=chunk.text,
+                            source="docs",
+                            metadata={"title": title, **chunk.metadata},
+                        )
+
+                        # Insert into database
+                        await self._insert_chunk(
+                            db_session=db_session,
+                            chunk_id=chunk_id,
+                            text=chunk.text,
+                            source="docs",
+                            embedding=embedding,
+                            tsvector_text=tsvector_text,
+                            metadata=chunk_create.metadata,
+                        )
+
+                        stats["chunks_count"] += 1
+
+                    except Exception as exc:
+                        logger.exception(
+                            "corpus_ingest.chunk_failed",
+                            title=title,
+                            error=str(exc),
+                        )
+                        stats["errors_count"] += 1
+
+                stats["docs_count"] += 1
+
+            except Exception as exc:
+                logger.exception(
+                    "corpus_ingest.doc_failed",
+                    title=title,
+                    error=str(exc),
+                )
+                stats["errors_count"] += 1
+
+        logger.info("corpus_ingest.docs_complete", **stats)
         return stats
 
     async def ingest_issues(
         self,
+        issues: list[dict[str, Any]],  # [{id, title, body, labels}, ...]
+        embedder: EmbeddingModel,
+        db_session: AsyncSession,
         exclude_issue_ids: set[int] | None = None,
-        chunker=None,
-        embedder=None,
-        db_session=None,
     ) -> dict[str, int]:
         """Ingest resolved issues (NOT in training set).
 
         Args:
-            exclude_issue_ids: Issue IDs to skip (training/test splits)
-            chunker: MarkdownChunker instance
+            issues: List of issue dicts
             embedder: EmbeddingModel instance
-            db_session: SQLAlchemy session to store chunks
+            db_session: SQLAlchemy async session
+            exclude_issue_ids: Issue IDs to skip (training/test splits)
 
         Returns:
             Ingestion stats: {issues_count, chunks_count, errors_count}
         """
-        logger.info("corpus_ingest.issues_start")
+        logger.info("corpus_ingest.issues_start", total=len(issues))
 
         stats = {"issues_count": 0, "chunks_count": 0, "errors_count": 0}
 
         if exclude_issue_ids is None:
             exclude_issue_ids = set()
 
-        # TODO: Implement issue ingestion
-        # 1. Query MONAI closed issues via GitHub API
-        # 2. Filter out exclude_issue_ids
-        # 3. For each issue:
-        #    - Create document from title + body
-        #    - Chunk
-        #    - Embed
-        #    - Insert with metadata: {issue_id, labels, created_at, source: "issue"}
+        for issue in issues:
+            issue_id = issue.get("id")
 
-        logger.info(
-            "corpus_ingest.issues_placeholder",
-            excluded_count=len(exclude_issue_ids),
-        )
+            if issue_id in exclude_issue_ids:
+                continue
+
+            try:
+                # Create document from issue title + body
+                title = issue.get("title", "")
+                body = issue.get("body", "")
+                document = f"# {title}\n\n{body}"
+
+                # Chunk the issue
+                chunks = self.chunker.chunk(document, source=f"issue_{issue_id}")
+
+                for chunk in chunks:
+                    try:
+                        # Embed the chunk
+                        embedding = await embedder.embed(chunk.text)
+
+                        # Create tsvector content
+                        tsvector_text = f"{title} {chunk.text}"
+
+                        # Create record with issue metadata
+                        chunk_id = self._generate_chunk_id(
+                            f"issue_{issue_id}", chunk.text
+                        )
+                        metadata = {
+                            "issue_id": str(issue_id),
+                            "labels": ",".join(issue.get("labels", [])),
+                            **chunk.metadata,
+                        }
+
+                        await self._insert_chunk(
+                            db_session=db_session,
+                            chunk_id=chunk_id,
+                            text=chunk.text,
+                            source="issue",
+                            embedding=embedding,
+                            tsvector_text=tsvector_text,
+                            metadata=metadata,
+                        )
+
+                        stats["chunks_count"] += 1
+
+                    except Exception as exc:
+                        logger.exception(
+                            "corpus_ingest.issue_chunk_failed",
+                            issue_id=issue_id,
+                            error=str(exc),
+                        )
+                        stats["errors_count"] += 1
+
+                stats["issues_count"] += 1
+
+            except Exception as exc:
+                logger.exception(
+                    "corpus_ingest.issue_failed",
+                    issue_id=issue_id,
+                    error=str(exc),
+                )
+                stats["errors_count"] += 1
+
+        logger.info("corpus_ingest.issues_complete", **stats)
         return stats
 
-    async def verify_corpus(self, db_session=None) -> dict[str, int]:
+    async def verify_corpus(self, db_session: AsyncSession) -> dict[str, int]:
         """Verify corpus is indexed correctly.
 
         Args:
-            db_session: SQLAlchemy session
+            db_session: SQLAlchemy async session
 
         Returns:
             Stats: {total_chunks, indexed_chunks, unindexed_chunks}
         """
-        # TODO: Query rag_chunks table
-        # - Count total rows
-        # - Count rows with non-null embedding vectors
-        # - Verify pgvector index exists
+        # Count total chunks
+        total_result = await db_session.execute(select(text("COUNT(*)")))
+        total = total_result.scalar() or 0
 
-        logger.info("corpus_ingest.verify_placeholder")
-        return {
-            "total_chunks": 0,
-            "indexed_chunks": 0,
-            "unindexed_chunks": 0,
+        # Count chunks with embeddings
+        indexed_result = await db_session.execute(
+            select(text("COUNT(*) FROM rag_chunks WHERE embedding IS NOT NULL"))
+        )
+        indexed = indexed_result.scalar() or 0
+
+        stats = {
+            "total_chunks": int(total),
+            "indexed_chunks": int(indexed),
+            "unindexed_chunks": int(total) - int(indexed),
         }
+
+        logger.info("corpus_ingest.verify_complete", **stats)
+        return stats
+
+    async def _insert_chunk(
+        self,
+        db_session: AsyncSession,
+        chunk_id: str,
+        text: str,
+        source: str,
+        embedding: list[float],
+        tsvector_text: str,
+        metadata: dict[str, str],
+    ) -> None:
+        """Insert a single chunk into the database.
+
+        Args:
+            db_session: SQLAlchemy async session
+            chunk_id: Unique chunk identifier
+            text: Chunk text content
+            source: "docs" or "issue"
+            embedding: Vector embedding
+            tsvector_text: Text for tsvector indexing
+            metadata: Additional metadata
+        """
+        # Create tsvector using Postgres function
+        stmt = text(
+            "INSERT INTO rag_chunks (chunk_id, text, source, embedding, tsvector, metadata) "
+            "VALUES (:chunk_id, :text, :source, :embedding, to_tsvector('english', :tsvector_text), :metadata) "
+            "ON CONFLICT (chunk_id) DO NOTHING"
+        ).bindparams(
+            chunk_id=chunk_id,
+            text=text,
+            source=source,
+            embedding=str(embedding),  # pgvector expects string format
+            tsvector_text=tsvector_text,
+            metadata=metadata,
+        )
+
+        await db_session.execute(stmt)
+        await db_session.commit()
+
+    @staticmethod
+    def _generate_chunk_id(source: str, text: str) -> str:
+        """Generate a unique chunk ID from source and text hash."""
+        hash_str = hashlib.sha256(text.encode()).hexdigest()[:16]
+        return f"{source}_{hash_str}"
