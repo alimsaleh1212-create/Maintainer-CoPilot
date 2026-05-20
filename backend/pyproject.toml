@@ -39,6 +39,18 @@ model-server = [
     "transformers>=5.8.1",
 ]
 
+# Use CPU-only PyTorch wheel to avoid downloading 2GB+ of CUDA packages.
+# Model-server (DistilBERT classifier) runs fine on CPU for this workload.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu" }
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
