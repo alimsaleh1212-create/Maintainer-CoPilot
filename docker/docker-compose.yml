@@ -61,6 +61,35 @@ services:
     ports:
       - "${VAULT_PORT:-8200}:8200"
 
+  vault-init:
+    image: hashicorp/vault:latest
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Waiting for Vault to be healthy..."
+        while ! vault status -address=http://vault:8200 >/dev/null 2>&1; do
+          sleep 1
+        done
+        echo "Vault is ready. Seeding secrets..."
+        vault kv put -address=http://vault:8200 secret/copilot \
+          gemini_api_key="dev-gemini-key-placeholder" \
+          ollama_host="http://ollama:11434" \
+          jwt_signing_key="dev-jwt-signing-key-change-in-production-$(date +%s)" \
+          database_url="postgresql://copilot:copilot@db:5432/copilot" \
+          minio_access_key="minioadmin" \
+          minio_secret_key="minioadmin" \
+          langfuse_public_key="dev-langfuse-public-key" \
+          langfuse_secret_key="dev-langfuse-secret-key"
+        echo "✓ Secrets seeded successfully"
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: "${VAULT_ROOT_TOKEN}"
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+
   langfuse:
     image: langfuse/langfuse:latest
     depends_on:
@@ -95,8 +124,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      vault:
-        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     restart: "no"
 
   # ---------------------------------------------------------------------------
@@ -138,8 +167,8 @@ services:
       VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
       VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
     depends_on:
-      vault:
-        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     healthcheck:
