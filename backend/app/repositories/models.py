@@ -24,7 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.repositories.base import Base
 
-EMBEDDING_DIM = 384  # BAAI/bge-small-en-v1.5
+EMBEDDING_DIM = 768  # nomic-embed-text via Ollama
 
 
 class User(Base):
