@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Dataset files (large, reproducible from GitHub API)
+data/raw_issues.jsonl
+data/train.jsonl
+data/val.jsonl
+data/test.jsonl
+data/_globals.pkl
+# Derived from raw + llm_labeled — regenerate with the notebook
+data/processed_issues.jsonl
+# llm_labeled.jsonl is NOT ignored — LLM calls cost money, commit the cache
+
+# Model weights (large binary — never commit)
+artifacts/classifier/best/
+artifacts/classifier/checkpoint-*/
+artifacts/classical_ml/
+
+# Eval report is committed (it's small JSON metadata)
+!artifacts/eval_report.json
