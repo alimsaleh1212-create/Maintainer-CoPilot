@@ -40,16 +40,23 @@ Training is offline; inference is online. The cleanest boundary is `model_card.j
 - `.gitignore`: added `.ipynb_checkpoints/`.
 
 ## Tests
+
+**MON unit tests (45 total, all passing):**
+- `tests/unit/test_redaction.py` (18 tests) — verifies fake `sk-...` keys redacted across all three paths: logger, traces, memory
+- `tests/unit/test_settings.py` (4 tests) — validates Settings class (`extra="forbid"`, required fields, defaults)
+- `tests/unit/test_label_mapping.py` (10 new tests) — verifies 3-class contract (bug, feature, support) and 4→3 merge rationale
 - `tests/unit/test_classifier_loads.py` — expanded from 6 → 9 cases, adding:
   - `test_model_card_without_classes_raises` — refuses to boot if card has no `classes` field
   - `test_class_set_drift_raises` — 4-class card vs 3-class backend → refuse
   - `test_class_order_drift_raises` — same classes reordered → refuse (index mapping changes)
+- `tests/unit/test_smoke.py`, `test_vault.py` — smoke tests for module imports and Vault connectivity
 
 ## Checks
 ```
-ruff check .  → all clean (notebooks excluded)
-mypy app/     → 24 source files, no issues
-pytest -q     → 35 passed, 1 deselected
+ruff check . → clean (3 minor fixes auto-applied, notebooks excluded)
+mypy --strict app/ → 24 source files, no issues
+pytest tests/unit/ -q → 45 passed (redaction 18, settings 4, labels 10, classifier 9, smoke/vault 4)
+pytest -q -m "not eval" → 45 passed, 0 deselected (no eval tests at this stage)
 ```
 
 ## What's next
