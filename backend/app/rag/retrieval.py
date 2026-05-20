@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import structlog
+from sqlalchemy import func, literal_column, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import RagChunk
 
 logger = structlog.get_logger(__name__)
 
@@ -127,10 +131,14 @@ class HybridRetriever:
         self,
         query: str,
         embedding_fn: Callable[[str], Any],
-        db_session: Any,
+        db_session: AsyncSession,
         top_k: int = 50,
     ) -> list[RetrievedChunk]:
         """Dense search using pgvector similarity.
+
+        Uses cosine distance (<=> operator) to find semantically similar chunks.
+        Cosine distance ranges [0, 2], so we convert to similarity [0, 1]:
+        similarity = 1 - distance
 
         Args:
             query: Query text
@@ -139,30 +147,58 @@ class HybridRetriever:
             top_k: Number of results
 
         Returns:
-            List of chunks with dense scores
+            List of chunks with dense scores (similarity 0-1)
         """
         # Embed query
         query_embedding = await embedding_fn(query)
 
-        # TODO: Query pgvector
-        # This requires RAG corpus to be indexed first (WED step 1)
-        # Placeholder SQL:
-        # SELECT chunk_id, text, source,
-        #        (1 - (embedding <=> query_embedding)) as score
-        # FROM rag_chunks
-        # ORDER BY embedding <=> query_embedding
-        # LIMIT {top_k}
+        # Query pgvector: find nearest neighbors by cosine distance
+        stmt = (
+            text(
+                "SELECT id, chunk_id, text, source, "
+                "       1 - (embedding <=> :query_embedding::vector) as score "
+                "FROM rag_chunks "
+                "ORDER BY embedding <=> :query_embedding::vector "
+                "LIMIT :top_k"
+            )
+            .bindparams(
+                query_embedding=str(query_embedding),  # pgvector expects string format
+                top_k=top_k,
+            )
+        )
 
-        logger.info("retrieval.dense_search_placeholder", query=query)
-        return []  # Placeholder
+        results = await db_session.execute(stmt)
+        rows = results.fetchall()
+
+        logger.info(
+            "retrieval.dense_search",
+            query=query[:100],
+            returned=len(rows),
+            top_k=top_k,
+        )
+
+        return [
+            RetrievedChunk(
+                chunk_id=row.chunk_id,
+                text=row.text,
+                source=row.source,
+                score=float(row.score),
+                dense_score=float(row.score),
+                sparse_score=None,
+            )
+            for row in rows
+        ]
 
     async def _sparse_search(
         self,
         query: str,
-        db_session: Any,
+        db_session: AsyncSession,
         top_k: int = 50,
     ) -> list[RetrievedChunk]:
-        """Sparse search using BM25 (Postgres tsvector).
+        """Sparse search using BM25-like ranking (Postgres tsvector + ts_rank_cd).
+
+        Converts the query to a tsvector-compatible format and uses ts_rank_cd
+        for BM25-style relevance ranking. ts_rank_cd normalizes scores to [0, 1].
 
         Args:
             query: Query text
@@ -170,18 +206,40 @@ class HybridRetriever:
             top_k: Number of results
 
         Returns:
-            List of chunks with sparse scores
+            List of chunks with sparse scores (BM25-like, 0-1)
         """
-        # TODO: Query Postgres tsvector
-        # SELECT chunk_id, text, source,
-        #        ts_rank_cd(tsvector, tsquery) as score
-        # FROM rag_chunks
-        # WHERE tsvector @@ tsquery
-        # ORDER BY score DESC
-        # LIMIT {top_k}
+        # Convert query to Postgres tsquery format (space-separated words become OR clauses)
+        # to_tsquery returns a tsquery; plainto_tsquery makes it safer for user input
+        stmt = text(
+            "SELECT id, chunk_id, text, source, "
+            "       ts_rank_cd(tsvector, plainto_tsquery('english', :query)) as score "
+            "FROM rag_chunks "
+            "WHERE tsvector @@ plainto_tsquery('english', :query) "
+            "ORDER BY score DESC "
+            "LIMIT :top_k"
+        ).bindparams(query=query, top_k=top_k)
 
-        logger.info("retrieval.sparse_search_placeholder", query=query)
-        return []  # Placeholder
+        results = await db_session.execute(stmt)
+        rows = results.fetchall()
+
+        logger.info(
+            "retrieval.sparse_search",
+            query=query[:100],
+            returned=len(rows),
+            top_k=top_k,
+        )
+
+        return [
+            RetrievedChunk(
+                chunk_id=row.chunk_id,
+                text=row.text,
+                source=row.source,
+                score=float(row.score),
+                dense_score=None,
+                sparse_score=float(row.score),
+            )
+            for row in rows
+        ]
 
     def _combine_scores(
         self,

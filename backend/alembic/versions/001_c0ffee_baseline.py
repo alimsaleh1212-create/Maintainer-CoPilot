@@ -191,6 +191,48 @@ def upgrade() -> None:
     )
 
     # ------------------------------------------------------------------ #
+    # rag_chunks (pgvector + BM25 sparse search)
+    # ------------------------------------------------------------------ #
+    op.create_table(
+        "rag_chunks",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            server_default=sa.text("gen_random_uuid()"),
+            nullable=False,
+        ),
+        sa.Column("chunk_id", sa.String(255), nullable=False),
+        sa.Column("text", sa.Text(), nullable=False),
+        sa.Column("source", sa.String(64), nullable=False),  # "docs" | "issue"
+        sa.Column("embedding", Vector(EMBEDDING_DIM), nullable=False),
+        sa.Column("tsvector", postgresql.TSVECTOR(), nullable=False),
+        sa.Column(
+            "metadata",
+            postgresql.JSONB(),
+            server_default="{}",
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("chunk_id"),
+    )
+    # Dense search: IVFFlat index on embedding vector
+    op.create_index("ix_rag_chunks_embedding", "rag_chunks", ["embedding"],
+                   postgresql_using="ivfflat",
+                   postgresql_with={"lists": 100})
+    # Sparse search: GIN index on tsvector for full-text search (BM25 approximation)
+    op.create_index("ix_rag_chunks_tsvector", "rag_chunks", ["tsvector"],
+                   postgresql_using="gin")
+    # Metadata filtering support
+    op.create_index("ix_rag_chunks_source", "rag_chunks", ["source"])
+    op.create_index("ix_rag_chunks_created_at", "rag_chunks", ["created_at"])
+
+    # ------------------------------------------------------------------ #
     # audit_log
     # ------------------------------------------------------------------ #
     op.create_table(
@@ -221,6 +263,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("audit_log")
+    op.drop_table("rag_chunks")
     op.drop_table("memories")
     op.drop_table("messages")
     op.drop_table("conversations")
