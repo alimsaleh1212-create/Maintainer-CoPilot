@@ -128,7 +128,7 @@ services:
           gemini_api_key="dev-gemini-key-placeholder" \
           ollama_host="http://ollama:11434" \
           jwt_signing_key="dev-jwt-signing-key-change-in-production-$(date +%s)" \
-          database_url="postgresql://copilot:copilot@db:5432/copilot" \
+          database_url="postgresql+asyncpg://copilot:copilot@db:5432/copilot" \
           minio_access_key="minioadmin" \
           minio_secret_key="minioadmin" \
           langfuse_public_key="dev-langfuse-public-key" \
