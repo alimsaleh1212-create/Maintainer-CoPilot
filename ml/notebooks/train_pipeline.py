@@ -251,7 +251,204 @@ def make_splits_from_labeled(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SECTION 3 — DistilBERT
+# SECTION 3 — LLM Auto-Label
+#
+# Only ~50% of MONAI issues carry a recognised label tag.  We send the
+# unlabeled half to Gemini (batched, 5 issues per request) so the training
+# corpus nearly doubles.  Results are cached in data/llm_labeled.jsonl and
+# merged with github-labeled rows into data/processed_issues.jsonl.
+# Issues the LLM classifies as "other" are saved but excluded from training.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_GEMINI_LABEL_URL = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+)
+_LABEL_BATCH_SIZE = 5
+_LABEL_SLEEP = 1.0   # seconds between batches — stays well under free-tier 15 RPM
+_VALID_LABELS = set(CLASS_NAMES) | {"other"}
+
+_SYSTEM_BATCH = (
+    "You are an issue classifier for open-source repositories.\n"
+    "You will receive a numbered list of GitHub issue texts.\n"
+    "Classify each into exactly one of: bug, feature, support, other.\n\n"
+    "  bug     -- A defect, crash, regression, or unexpected behaviour.\n"
+    "  feature -- A request for new functionality or an enhancement.\n"
+    "  support -- A question, docs gap, or request for help.\n"
+    "  other   -- Does not clearly fit (e.g. release notes, CI-only, meta).\n\n"
+    "Reply with EXACTLY one label per line, same order as the input.\n"
+    "No numbers, no punctuation, no explanation — just the label word."
+)
+_GEN_CFG = {"temperature": 0.0, "thinkingConfig": {"thinkingBudget": 0}}
+
+
+def _call_gemini(
+    client: httpx.Client, body: dict[str, Any], api_key: str, retries: int = 5
+) -> dict[str, Any]:
+    delay = 5.0
+    for attempt in range(retries):
+        r = client.post(
+            _GEMINI_LABEL_URL, params={"key": api_key}, json=body, timeout=60.0
+        )
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code == 429:
+            print(f"  429 rate-limit — sleeping {delay:.0f}s (attempt {attempt + 1})", flush=True)
+            time.sleep(delay)
+            delay = min(delay * 2, 120)
+            continue
+        r.raise_for_status()
+    raise RuntimeError("Gemini max retries exceeded")
+
+
+def _classify_batch(
+    issues: list[dict[str, Any]], client: httpx.Client, api_key: str
+) -> list[str]:
+    def _text(iss: dict[str, Any]) -> str:
+        return f"{iss['title']}\n\n{iss.get('body') or ''}".strip()[:400]
+
+    parts = [f"{i + 1}. {_text(iss)}" for i, iss in enumerate(issues)]
+    body = {
+        "system_instruction": {"parts": [{"text": _SYSTEM_BATCH}]},
+        "contents": [{"role": "user", "parts": [{"text": "\n\n---\n\n".join(parts)}]}],
+        "generationConfig": {**_GEN_CFG, "maxOutputTokens": 20 * len(issues)},
+    }
+    data = _call_gemini(client, body, api_key)
+    cand = data["candidates"][0]
+    content_parts = cand.get("content", {}).get("parts", [])
+    if not content_parts:
+        raise ValueError(f"empty response finishReason={cand.get('finishReason')}")
+    tokens = [t.strip().lower() for t in content_parts[0]["text"].strip().splitlines() if t.strip()]
+    labels = [
+        (tok.split()[0].rstrip(".,;:") if tok.split() else "support")
+        for tok in tokens[: len(issues)]
+    ]
+    labels = [lbl if lbl in _VALID_LABELS else "support" for lbl in labels]
+    while len(labels) < len(issues):
+        labels.append("support")
+    return labels
+
+
+def label_with_llm(
+    raw_issues: list[dict[str, Any]], github_labeled: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """LLM-label unlabeled issues and return the training-eligible combined set.
+
+    Fast path: if data/processed_issues.jsonl exists (already run before),
+    loads it directly — no API calls made.
+
+    Slow path: batches unlabeled issues to Gemini (5 per request), saves each
+    batch to the cache file incrementally (safe to interrupt and resume), then
+    merges with github-labeled rows and writes processed_issues.jsonl.
+
+    Returns the combined list with 'other' rows removed (they would add noise
+    to the 3-class classifier).
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    llm_cache_path = DATA_DIR / "llm_labeled.jsonl"
+    processed_path = DATA_DIR / "processed_issues.jsonl"
+
+    # ── Fast path: processed file already exists ───────────────────────────
+    if processed_path.exists():
+        with processed_path.open() as fh:
+            combined = [json.loads(l) for l in fh]
+        n_other = sum(1 for r in combined if r["label"] == "other")
+        eligible = [r for r in combined if r["label"] != "other"]
+        cc = Counter(r["label"] for r in eligible)
+        print(f"  cache hit: {len(combined)} total → {len(eligible)} training-eligible"
+              f" ({n_other} 'other' excluded)")
+        for c in CLASS_NAMES:
+            print(f"    {c:<10} {cc[c]:>5}")
+        return eligible
+
+    # ── Identify issues with no/ambiguous label tags ───────────────────────
+    unlabeled_raw = [
+        i for i in raw_issues
+        if resolve_label(i["labels"]) is None and i.get("closed_at") is not None
+    ]
+    print(f"  github-labeled : {len(github_labeled)}")
+    print(f"  unlabeled raw  : {len(unlabeled_raw)}")
+
+    # ── Load cache (allows resuming an interrupted run) ────────────────────
+    llm_cache: dict[int, str] = {}
+    if llm_cache_path.exists():
+        with llm_cache_path.open() as fh:
+            for line in fh:
+                row = json.loads(line)
+                llm_cache[row["id"]] = row["label"]
+        print(f"  llm cache      : {len(llm_cache)} already labeled")
+
+    to_label = [i for i in unlabeled_raw if i["id"] not in llm_cache]
+    print(f"  still to label : {len(to_label)}")
+
+    # ── Call Gemini in batches ─────────────────────────────────────────────
+    if to_label and api_key:
+        batches = [to_label[i: i + _LABEL_BATCH_SIZE] for i in range(0, len(to_label), _LABEL_BATCH_SIZE)]
+        print(f"  batches        : {len(batches)} × {_LABEL_BATCH_SIZE}")
+        errors = 0
+        labeled_count = 0
+        with llm_cache_path.open("a") as cache_fh, httpx.Client(timeout=60.0) as client:
+            for bi, batch in enumerate(batches):
+                try:
+                    batch_labels = _classify_batch(batch, client, api_key)
+                except Exception as e:
+                    print(f"  batch {bi} failed ({e}) — fallback support", flush=True)
+                    errors += 1
+                    batch_labels = ["support"] * len(batch)
+                for iss, lbl in zip(batch, batch_labels):
+                    llm_cache[iss["id"]] = lbl
+                    cache_fh.write(json.dumps({"id": iss["id"], "label": lbl}) + "\n")
+                    labeled_count += 1
+                cache_fh.flush()
+                if (bi + 1) % 20 == 0:
+                    print(f"  labeled {labeled_count}/{len(to_label)}  errors={errors}", flush=True)
+                time.sleep(_LABEL_SLEEP)
+        print(f"  LLM labeling done  total={labeled_count}  errors={errors}")
+    elif to_label and not api_key:
+        print("  GEMINI_API_KEY not set — proceeding with github-labeled only")
+
+    # ── Build LLM-labeled rows and merge ──────────────────────────────────
+    id_to_raw = {i["id"]: i for i in raw_issues}
+    llm_rows: list[dict[str, Any]] = []
+    for iid, lbl in llm_cache.items():
+        raw = id_to_raw.get(iid)
+        if raw is None or raw.get("closed_at") is None:
+            continue
+        txt = f"{raw['title']}\n\n{raw.get('body') or ''}".strip()
+        llm_rows.append({
+            "id": raw["id"], "number": raw["number"],
+            "text": txt, "label": lbl,
+            "label_idx": CLASS_TO_IDX.get(lbl, 3),
+            "closed_at": raw["closed_at"],
+            "label_source": "llm",
+        })
+
+    for r in github_labeled:
+        r.setdefault("label_source", "github_label")
+
+    combined = github_labeled + llm_rows
+    with processed_path.open("w") as fh:
+        for r in combined:
+            fh.write(json.dumps(r) + "\n")
+
+    cc_all = Counter(r["label"] for r in combined)
+    n_other = cc_all.get("other", 0)
+    eligible = [r for r in combined if r["label"] != "other"]
+    cc = Counter(r["label"] for r in eligible)
+
+    src_github = sum(1 for r in combined if r.get("label_source") == "github_label")
+    src_llm = sum(1 for r in combined if r.get("label_source") == "llm")
+    print(f"  saved {len(combined)} → processed_issues.jsonl")
+    print(f"    github-label  : {src_github}")
+    print(f"    llm-labeled   : {src_llm}")
+    print(f"    other excluded: {n_other}")
+    print(f"  training-eligible: {len(eligible)}")
+    for c in CLASS_NAMES:
+        print(f"    {c:<10} {cc[c]:>5}")
+    return eligible
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION 4 — DistilBERT fine-tune
 # ──────────────────────────────────────────────────────────────────────────────
 
 def sha256_weights(directory: Path) -> str:
@@ -398,7 +595,7 @@ def train_distilbert(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SECTION 4 — TF-IDF + LogReg baseline
+# SECTION 5 — TF-IDF + LogReg baseline
 # ──────────────────────────────────────────────────────────────────────────────
 
 def train_tfidf(
@@ -435,7 +632,7 @@ def train_tfidf(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SECTION 5 — Gemini few-shot baseline
+# SECTION 6 — Gemini few-shot baseline
 # ──────────────────────────────────────────────────────────────────────────────
 
 def run_gemini_baseline(
@@ -526,7 +723,7 @@ def run_gemini_baseline(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SECTION 6 — Three-way comparison + eval_report.json
+# SECTION 7 — Three-way comparison + eval_report.json
 # ──────────────────────────────────────────────────────────────────────────────
 
 def write_eval_report(
@@ -624,37 +821,41 @@ def main() -> None:
     print(f"GITHUB : {'✓' if os.environ.get('GITHUB_TOKEN') else '✗'}")
     print(f"GEMINI : {'✓' if os.environ.get('GEMINI_API_KEY') else '✗'}\n")
 
-    print("── 1. Fetch MONAI issues ──────────────────────────────────────────")
+    print("── 1. Fetch MONAI closed issues ──────────────────────────────────")
     raw = fetch_closed_issues()
 
-    print("\n── 2. Load processed issues (github-labeled + LLM-labeled) ───────")
-    processed_path = DATA_DIR / "processed_issues.jsonl"
-    if processed_path.exists():
-        with processed_path.open() as _f:
-            all_labeled = [json.loads(l) for l in _f]
-        # Exclude "other" — only 3 canonical classes go into training
-        all_labeled = [r for r in all_labeled if r["label"] != "other"]
-        from collections import Counter as _Counter
-        _cc = _Counter(r["label"] for r in all_labeled)
-        print(f"  {len(all_labeled)} training-eligible issues  " +
-              "  ".join(f"{c}={_cc[c]}" for c in CLASS_NAMES))
-    else:
-        print("  processed_issues.jsonl not found — falling back to github labels only")
-        all_labeled = [r for r in (build_row(i) for i in raw) if r is not None]
+    print("\n── 2. GitHub label mapping — 4 labels → 3 canonical classes ─────")
+    # Map known GitHub label tags to bug/feature/support.  Issues with no
+    # recognised tag (~50% of the corpus) will be labeled by Gemini next.
+    github_labeled = [r for r in (build_row(i) for i in raw) if r is not None]
+    cc = Counter(r["label"] for r in github_labeled)
+    print(f"  github-labeled: {len(github_labeled)}  " +
+          "  ".join(f"{c}={cc[c]}" for c in CLASS_NAMES))
 
-    print("\n── 3. Stratified time-aware split ────────────────────────────────")
+    print("\n── 3. LLM auto-label unlabeled issues ─────────────────────────────")
+    # Gemini-2.5-Flash classifies the remaining ~50% in batches of 5.
+    # Results cached to llm_labeled.jsonl — API never called twice.
+    # 'other' issues are excluded from training (noise for 3-class model).
+    all_labeled = label_with_llm(raw, github_labeled)
+
+    print("\n── 4. Stratified time-aware split (70 / 15 / 15) ─────────────────")
+    # Most-recent 15% by closed_at → test, preventing temporal leakage.
     train, val, test = make_splits_from_labeled(all_labeled)
 
-    print("\n── 4. Train DistilBERT ────────────────────────────────────────────")
+    print("\n── 5. Train DistilBERT ────────────────────────────────────────────")
+    # Full fine-tune, early stopping patience=2, fp16 on GPU.
     dl_results = train_distilbert(train, val, test)
 
-    print("\n── 5. TF-IDF + LogReg baseline ───────────────────────────────────")
+    print("\n── 6. TF-IDF + LogReg baseline ───────────────────────────────────")
+    # Fast classical baseline: bigram TF-IDF + balanced logistic regression.
     ml_results = train_tfidf(train, test)
 
-    print("\n── 6. Gemini few-shot baseline ───────────────────────────────────")
+    print("\n── 7. Gemini few-shot baseline ───────────────────────────────────")
+    # 5-shot per class (15 examples total).  Expected to lose to the
+    # fine-tuned model — general LLMs can't match domain-specific fine-tuning.
     llm_results = run_gemini_baseline(train, test)
 
-    print("\n── 7. Three-way comparison + eval_report.json ────────────────────")
+    print("\n── 8. Three-way comparison + eval_report.json ────────────────────")
     write_eval_report(train, test, dl_results, ml_results, llm_results)
 
     print("\n" + "=" * 70)
