@@ -58,25 +58,23 @@ class EmbeddingModel:
         Returns:
             List of embedding vectors (each is list[float])
         """
-        embeddings = []
-        for text in texts:
-            try:
-                resp = await self.client.post(
-                    f"{self.ollama_host}/api/embed",
-                    json={"model": self.model_name, "input": text},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                embeddings.append(data["embedding"])
-            except Exception as e:
-                logger.error(
-                    "embeddings.embed_failed",
-                    text=text[:50],
-                    error=str(e),
-                )
-                raise
-
-        return embeddings
+        try:
+            # Ollama /api/embed accepts a list for batch embedding
+            resp = await self.client.post(
+                f"{self.ollama_host}/api/embed",
+                json={"model": self.model_name, "input": texts},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # Response: {"model": ..., "embeddings": [[float, ...]]}
+            return data["embeddings"]
+        except Exception as e:
+            logger.error(
+                "embeddings.embed_batch_failed",
+                count=len(texts),
+                error=str(e),
+            )
+            raise
 
     async def embed(self, text: str) -> list[float]:
         """Embed a single text.
