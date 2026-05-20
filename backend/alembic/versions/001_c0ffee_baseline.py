@@ -17,7 +17,7 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-EMBEDDING_DIM = 384  # BAAI/bge-small-en-v1.5
+EMBEDDING_DIM = 768  # nomic-embed-text via Ollama
 
 
 def upgrade() -> None:

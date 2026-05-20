@@ -10,8 +10,8 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 # Model constants
-MODEL_NAME = "BAAI/bge-small-en-v1.5"
-EMBEDDING_DIM = 384  # bge-small produces 384-dim vectors
+MODEL_NAME = "nomic-embed-text"
+EMBEDDING_DIM = 768  # nomic-embed-text produces 768-dim vectors
 OLLAMA_HOST = "http://ollama:11434"
 
 
