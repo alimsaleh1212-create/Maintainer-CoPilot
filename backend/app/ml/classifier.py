@@ -152,8 +152,7 @@ def load_classifier(model_dir: Path) -> DistilBertClassifier:
     actual_hash = _sha256_dir_weights(model_dir)
     if actual_hash != expected_hash:
         raise ClassifierLoadError(
-            f"SHA-256 mismatch for {model_dir}: "
-            f"expected {expected_hash}, got {actual_hash}"
+            f"SHA-256 mismatch for {model_dir}: expected {expected_hash}, got {actual_hash}"
         )
 
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir))

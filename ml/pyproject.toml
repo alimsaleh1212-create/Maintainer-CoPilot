@@ -1,0 +1,25 @@
+[project]
+name = "maintainers-copilot-ml"
+version = "1.0.0"
+description = "Offline training pipeline — DistilBERT classifier + baselines. Not imported by backend."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.5.0",
+    "transformers>=5.8.1",
+    "datasets>=4.8.5",
+    "evaluate>=0.4.6",
+    "accelerate>=1.13.0",
+    "scikit-learn>=1.8.0",
+    "httpx>=0.28.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = []
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
