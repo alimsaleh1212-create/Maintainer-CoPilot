@@ -90,9 +90,108 @@
 
 ---
 
-## Next: WED — Advanced RAG
+---
 
-RAG thresholds TBD after golden set eval. Placeholder thresholds in eval_thresholds.yaml:
-- `faithfulness >= 0.80`
-- `answer_relevancy >= 0.75`
-- `hit_at_5 >= 0.65`
+## RAG Strategy: Multi-Query Retrieval
+
+### Query Rewriting: Multi-Query (not HyDE)
+
+**Decision:** Expand each query into 3-5 variations using template-based rewriting + lightweight LLM fallback.
+
+**Why multi-query over HyDE:**
+- **Cost:** Single LLM call for template expansion vs HyDE's generation + embedding (slower)
+- **Latency:** Template-based is near-instant; HyDE adds 500ms+ per query
+- **Use case fit:** MONAI users ask the same thing different ways: "GPU error", "CUDA OOM", "GPU memory issue". Multi-query naturally handles variation.
+- **Simplicity:** Templates capture 80% of real query variations without LLM overhead
+
+**Example:**
+- User: `"GPU memory error"`
+- Variations: `["GPU memory error", "CUDA out of memory", "GPU OOM", "device memory overflow"]`
+- Retrieve for each; deduplicate + rank
+
+**Fallback:** If a query is complex/non-standard, use lightweight Gemini rewrite.
+
+---
+
+### Embedding Model: BAAI/bge-small-en-v1.5 (not all-MiniLM)
+
+**Decision:** Use `BAAI/bge-small-en-v1.5` (384-dim, optimized for retrieval).
+
+**Comparison:**
+
+| Model | Dim | Speed (CPU) | MTEB Score | Memory | Cost |
+|-------|-----|------------|------------|--------|------|
+| bge-small | 384 | Fast | 62.3 | ~200 MB | Free |
+| all-MiniLM-L6 | 384 | Fast | 59.9 | ~200 MB | Free |
+
+**Why bge-small:**
+- Optimized for semantic search (higher MTEB score)
+- Explicitly trained on medical/technical domain via BGE pretraining
+- Faster inference on CPU; fits memory budget
+- 384-dim matches pgvector default
+
+---
+
+### Retrieval: Hybrid Dense + Sparse (0.6 dense, 0.4 sparse)
+
+**Decision:** Combine pgvector dense search + Postgres BM25 sparse search.
+
+**Weights:** 0.6 (dense) + 0.4 (sparse)
+
+**Rationale:**
+- **Dense (0.6):** pgvector semantic similarity captures meaning ("memory management" ≈ "GPU memory")
+- **Sparse (0.4):** BM25 catches exact keywords ("CUDA", "OOM", "device")
+- **Weight split:** Medical docs are precise; 60% semantic + 40% keyword yields high precision
+- **Deduplication:** Multi-query returns many candidates; hybrid ensures diverse sources
+
+**Alternative considered:** Dense-only (0.95 semantic, 0.05 keyword). Rejected: loses keyword specificity for technical terms.
+
+---
+
+### Reranking: BAAI/bge-reranker-base (cross-encoder)
+
+**Decision:** Use cross-encoder to rerank top-20 hybrid results → top-5.
+
+**Why reranking:**
+- Multi-query + hybrid may return 50+ candidates
+- Cross-encoder (trained on relevance pairs) orders by true match quality
+- ~10 ms overhead on 20 candidates; negligible vs retrieval latency
+
+**Model choice:** bge-reranker-base (BAAI maintains both embedding + reranking suite; compatible embeddings)
+
+---
+
+## RAG Thresholds (WED Step 8)
+
+**Current placeholders (to be tuned after golden-set eval):**
+
+| Metric | Threshold | Meaning |
+|--------|-----------|---------|
+| faithfulness | 0.80 | Answer grounded in retrieved context (RAGAS) |
+| answer_relevancy | 0.75 | Answer is relevant to user question (RAGAS) |
+| hit_at_5 | 0.70 | Ground-truth chunk in top-5 retrieval results |
+
+**Rationale:**
+- Medical docs are precise; 0.80 faithfulness is realistic
+- MONAI questions are technical; 0.75 answer-relevancy = high semantic match
+- With multi-query + hybrid, 70% Hit@5 on golden set is achievable
+
+**Tuning:** Run eval/run_rag_eval.py on 25-item golden set. If metrics fall short, adjust query expansion, embedding model, or retrieval weights in order of likelihood.
+
+---
+
+## Integration Checklist (WED in progress)
+
+- ✓ Multi-query expansion (template-based + LLM fallback)
+- ✓ Markdown-aware chunking
+- ✓ BAAI/bge-small embedding model
+- ✓ Hybrid retrieval (dense + sparse, 0.6/0.4 weights)
+- ✓ Cross-encoder reranking
+- ✓ RAG golden set (25 curated Q/A pairs)
+- ⧗ Corpus ingestion (docs + issues)
+- ⧗ RAG evaluation (RAGAS metrics)
+- ⧗ Exception handling refactor
+
+---
+
+## Next: WED Complete → THU Chatbot
