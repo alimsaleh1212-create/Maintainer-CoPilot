@@ -26,10 +26,11 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from app.api.exceptions import add_exception_handlers
-from app.api.routes import health
+from app.api.routes import health, rag
 from app.config import Settings, get_settings
 from app.infra.redaction import structlog_redaction_processor
 from app.infra.vault import VaultSecretMissing, VaultUnreachable
+from app.rag.embeddings import get_embedding_model
 
 logger = structlog.get_logger(__name__)
 
@@ -108,7 +109,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_factory: async_sessionmaker[Any] = async_sessionmaker(engine, expire_on_commit=False)
 
     # ------------------------------------------------------------------
-    # 3. Redis
+    # 3. Embedding model (for RAG)
+    # ------------------------------------------------------------------
+    try:
+        embedder = get_embedding_model()
+        embedder.load()
+        logger.info("embeddings_loaded", model=embedder.model_name)
+    except Exception as exc:
+        logger.critical("refuse_to_boot", reason="embeddings_failed", detail=str(exc))
+        await engine.dispose()
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # 4. Redis
     # ------------------------------------------------------------------
     redis: Redis = Redis.from_url(settings.redis_url, decode_responses=True)
     try:
@@ -120,7 +133,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 4. Store singletons on app.state
+    # 5. Store singletons on app.state
     # ------------------------------------------------------------------
     app.state.settings = settings
     app.state.engine = engine
@@ -151,6 +164,7 @@ def create_app() -> FastAPI:
 
     add_exception_handlers(app)
     app.include_router(health.router)
+    app.include_router(rag.router)
 
     return app
 

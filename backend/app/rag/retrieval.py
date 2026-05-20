@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import structlog
 
@@ -58,9 +60,10 @@ class HybridRetriever:
     async def retrieve(
         self,
         query_variations: list[str],
-        embedding_fn,
-        db_session,
-        reranker=None,
+        embedding_fn: Callable[[str], Any],
+        db_session: Any,
+        reranker: Any | None = None,
+        top_k: int | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve chunks using hybrid approach.
 
@@ -69,10 +72,13 @@ class HybridRetriever:
             embedding_fn: Async function to embed text
             db_session: SQLAlchemy async session
             reranker: Optional cross-encoder for reranking
+            top_k: Number of final results to return (defaults to self.top_k_final)
 
         Returns:
             Top-k retrieved chunks, scored and deduplicated
         """
+        if top_k is None:
+            top_k = self.top_k_final
         all_results = {}  # chunk_id → RetrievedChunk (for dedup)
 
         # For each query variation, retrieve
@@ -115,13 +121,13 @@ class HybridRetriever:
             )
 
         # Return top-k final
-        return ranked[: self.top_k_final]
+        return ranked[:top_k]
 
     async def _dense_search(
         self,
         query: str,
-        embedding_fn,
-        db_session,
+        embedding_fn: Callable[[str], Any],
+        db_session: Any,
         top_k: int = 50,
     ) -> list[RetrievedChunk]:
         """Dense search using pgvector similarity.
@@ -153,7 +159,7 @@ class HybridRetriever:
     async def _sparse_search(
         self,
         query: str,
-        db_session,
+        db_session: Any,
         top_k: int = 50,
     ) -> list[RetrievedChunk]:
         """Sparse search using BM25 (Postgres tsvector).
@@ -228,7 +234,7 @@ class HybridRetriever:
         self,
         query: str,
         candidates: list[RetrievedChunk],
-        reranker,
+        reranker: Any,
     ) -> list[RetrievedChunk]:
         """Rerank candidates using cross-encoder.
 
