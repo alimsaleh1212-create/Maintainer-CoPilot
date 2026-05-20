@@ -42,7 +42,7 @@ def _configure_logging(log_level: str) -> None:
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog_redaction_processor,   # scrub secrets before any emission
+            structlog_redaction_processor,  # scrub secrets before any emission
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
@@ -105,9 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await engine.dispose()
         sys.exit(1)
 
-    session_factory: async_sessionmaker[Any] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    session_factory: async_sessionmaker[Any] = async_sessionmaker(engine, expire_on_commit=False)
 
     # ------------------------------------------------------------------
     # 3. Redis

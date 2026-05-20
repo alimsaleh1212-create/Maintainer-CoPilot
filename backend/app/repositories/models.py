@@ -68,7 +68,9 @@ class Widget(Base):
     # Origins that may iframe this widget (enforces CSP frame-ancestors).
     allowed_origins: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
     theme: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")  # type: ignore[type-arg]
-    greeting: Mapped[str] = mapped_column(Text, nullable=False, server_default="Hi! How can I help?")
+    greeting: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="Hi! How can I help?"
+    )
     enabled_tools: Mapped[list[str]] = mapped_column(
         ARRAY(Text), nullable=False, server_default="{classify,ner,summarize,rag_search}"
     )
