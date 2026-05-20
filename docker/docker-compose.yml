@@ -61,6 +61,22 @@ services:
     ports:
       - "${VAULT_PORT:-8200}:8200"
 
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: -1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
   vault-init:
     image: hashicorp/vault:latest
     entrypoint: /bin/sh
@@ -143,6 +159,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -244,3 +262,4 @@ services:
 volumes:
   pg_data:
   minio_data:
+  ollama_data:
