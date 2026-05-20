@@ -13,7 +13,7 @@ FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
 # If pyproject.toml and uv.lock are out of sync (e.g., torch removed from project),
 # regenerate the lock to match. After first build, this is a no-op.
-RUN uv sync --frozen --no-dev || (uv lock && uv sync --frozen --no-dev)
+RUN uv sync --frozen --no-dev --group model-server || (uv lock && uv sync --frozen --no-dev --group model-server)
 
 FROM base AS runtime
 COPY --from=deps /app/.venv /app/.venv

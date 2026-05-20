@@ -109,12 +109,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_factory: async_sessionmaker[Any] = async_sessionmaker(engine, expire_on_commit=False)
 
     # ------------------------------------------------------------------
-    # 3. Embedding model (for RAG)
+    # 3. Embedding model (for RAG via Ollama)
     # ------------------------------------------------------------------
     try:
         embedder = get_embedding_model()
-        embedder.load()
-        logger.info("embeddings_loaded", model=embedder.model_name)
+        await embedder.ensure_model_pulled()
+        logger.info("embeddings_ready", model=embedder.model_name, host=embedder.ollama_host)
     except Exception as exc:
         logger.critical("refuse_to_boot", reason="embeddings_failed", detail=str(exc))
         await engine.dispose()
@@ -139,8 +139,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = redis
+    app.state.embedder = embedder
 
-    logger.info("startup_complete", services=["db", "redis"])
+    logger.info("startup_complete", services=["db", "redis", "embeddings"])
 
     yield
 
@@ -149,6 +150,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ------------------------------------------------------------------
     await engine.dispose()
     await redis.aclose()
+    await embedder.close()
     logger.info("shutdown_complete")
 
 
