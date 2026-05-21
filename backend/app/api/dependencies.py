@@ -118,18 +118,17 @@ def get_rag_service(request: Request) -> RAGService:  # noqa: ARG001
 
 
 def get_chatbot_service(request: Request) -> ChatbotService:
-    """Return a ChatbotService initialised with LLM credentials from Vault.
+    """Return a ChatbotService with injected primary (Gemini) + fallback (Ollama) clients.
 
     Args:
-        request: FastAPI request (used to access app.state.settings).
+        request: FastAPI request (used to access app.state singletons).
 
     Returns:
         ChatbotService instance.
     """
-    settings: Settings = request.app.state.settings
     return ChatbotService(
-        gemini_api_key=settings.gemini_api_key,
-        ollama_host=settings.ollama_host,
+        primary_llm=request.app.state.gemini_client,
+        fallback_llm=request.app.state.ollama_client,
     )
 
 

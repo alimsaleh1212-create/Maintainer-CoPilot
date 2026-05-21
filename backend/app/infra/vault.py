@@ -30,6 +30,11 @@ REQUIRED_KEYS: tuple[str, ...] = (
     "minio_secret_key",
     "langfuse_public_key",
     "langfuse_secret_key",
+    # LLM model names — not secrets, but stored in Vault so they can be changed
+    # without a container rebuild.  Seed via vault-init or scripts/seed_vault.py.
+    "gemini_model",
+    "ollama_chat_model",
+    "ollama_embed_model",
 )
 
 

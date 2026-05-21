@@ -17,16 +17,22 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict, runtime_checkable
 
 
-class LLMMessage(TypedDict):
+class LLMMessage(TypedDict, total=False):
     """A single message in an LLM conversation history.
 
     Attributes:
-        role: One of ``"system"``, ``"user"``, or ``"assistant"``.
-        content: Text content of the message.
+        role: One of ``"system"``, ``"user"``, ``"assistant"``, or ``"tool"``.
+        content: Text content of the message (required for most roles).
+        tool_calls: List of function calls emitted by the model (assistant role).
+        tool_call_id: ID of the tool call this result is responding to (tool role).
+        tool_name: Name of the tool that produced this result (tool role).
     """
 
     role: str
     content: str
+    tool_calls: list[dict[str, Any]]
+    tool_call_id: str
+    tool_name: str
 
 
 @dataclass
@@ -55,14 +61,14 @@ class LLMClient(Protocol):
 
     async def chat(
         self,
-        messages: list[LLMMessage],
+        messages: list[dict[str, Any]],
         system_prompt: str = "",
         tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate a plain-text reply to *messages*.
 
         Args:
-            messages: Conversation history (user + assistant turns).
+            messages: Conversation history in extended format (user/assistant/tool roles).
             system_prompt: Optional system instruction prepended to context.
             tools: Optional tool/function schemas made available to the model.
 
@@ -73,14 +79,16 @@ class LLMClient(Protocol):
 
     async def tool_call(
         self,
-        messages: list[LLMMessage],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        system_prompt: str = "",
     ) -> tuple[str, list[ToolCall]]:
         """Generate a reply that may include one or more tool calls.
 
         Args:
-            messages: Conversation history.
+            messages: Conversation history in extended format (may include tool results).
             tools: Tool/function schemas the model may call.
+            system_prompt: Optional system instruction.
 
         Returns:
             A 2-tuple of:

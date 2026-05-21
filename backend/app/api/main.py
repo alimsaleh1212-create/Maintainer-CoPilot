@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 import structlog
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -31,6 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from app.api.exceptions import add_exception_handlers
 from app.api.routes import auth, chat, classify, embed, health, memory, ner, rag, summarize, widgets
 from app.config import Settings, get_settings
+from app.infra.llm.gemini import GeminiClient
+from app.infra.llm.ollama import OllamaClient
 from app.infra.redaction import structlog_redaction_processor
 from app.infra.vault import VaultSecretMissing, VaultUnreachable
 from app.rag.embeddings import get_embedding_model
@@ -136,15 +139,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         sys.exit(1)
 
     # ------------------------------------------------------------------
-    # 5. Store singletons on app.state
+    # 5. LLM clients (primary Gemini + fallback Ollama)
+    # ------------------------------------------------------------------
+    ollama_http = httpx.AsyncClient(timeout=60.0)
+    gemini_client = GeminiClient(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
+        ollama_host=settings.ollama_host,
+    )
+    ollama_client = OllamaClient(
+        base_url=settings.ollama_host,
+        model=settings.ollama_chat_model,
+        embed_model=settings.ollama_embed_model,
+        http_client=ollama_http,
+    )
+    logger.info(
+        "llm_clients_ready",
+        gemini_model=settings.gemini_model,
+        ollama_model=settings.ollama_chat_model,
+    )
+
+    # ------------------------------------------------------------------
+    # 6. Store singletons on app.state
     # ------------------------------------------------------------------
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = redis
     app.state.embedder = embedder
+    app.state.gemini_client = gemini_client
+    app.state.ollama_client = ollama_client
 
-    logger.info("startup_complete", services=["db", "redis", "embeddings"])
+    logger.info("startup_complete", services=["db", "redis", "embeddings", "llm"])
 
     yield
 
@@ -154,6 +180,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await engine.dispose()
     await redis.aclose()
     await embedder.close()
+    await gemini_client.close()
+    await ollama_http.aclose()
     logger.info("shutdown_complete")
 
 

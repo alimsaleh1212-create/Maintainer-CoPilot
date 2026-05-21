@@ -20,6 +20,7 @@ from app.api.dependencies import (
     RAGServiceDep,
     SettingsDep,
 )
+
 from app.api.routes.auth import get_current_user
 from app.repositories.models import User
 
@@ -102,7 +103,6 @@ async def chat(
         classification_service=classification_service,
         rag_service=rag_service,
         db_session=db,
-        gemini_api_key=settings.gemini_api_key,
         top_k_memories=settings.long_term_memory_top_k,
     )
 

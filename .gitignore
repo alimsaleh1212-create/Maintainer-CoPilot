@@ -72,3 +72,6 @@ artifacts/
 # --- Local Alembic ----------------------------------------------------------
 # Keep migrations under backend/alembic/versions, but ignore any local SQL dumps
 *.sql.bak
+
+# ----- Claude ------
+.claude/

@@ -24,4 +24,6 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 # Add venv to PATH so python/uvicorn/alembic scripts are found without uv run.
 ENV PATH="/app/.venv/bin:$PATH"
+# Download spaCy model for NER (en_core_web_sm ≈ 12 MB).
+RUN python -m spacy download en_core_web_sm
 EXPOSE 8000

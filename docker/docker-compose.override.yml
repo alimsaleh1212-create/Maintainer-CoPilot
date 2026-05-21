@@ -1,13 +1,22 @@
 # Local-dev overrides — NOT committed to production deploys.
-# Adds bind mounts for hot-reload and exposes extra debug ports.
+#
+# Hot-reload strategy:
+#   - Bind-mount only the source directories (app/, prompts/, scripts/, tests/)
+#     so code changes are immediately visible to the running process.
+#   - Use named volumes for .venv so the packages baked into the image are
+#     preserved and not overwritten by the host directory.
+#   - When Python packages change (pyproject.toml / uv.lock), run:
+#       docker compose down -v && docker compose up -d --build
 
 services:
   api:
     volumes:
-      - ../backend:/app
+      - ../backend/app:/app/app
+      - ../backend/prompts:/app/prompts
+      - ../backend/scripts:/app/scripts
+      - ../backend/tests:/app/tests
+      - api_dev_venv:/app/.venv
     command:
-      - uv
-      - run
       - uvicorn
       - app.api.main:app
       - --host
@@ -15,20 +24,27 @@ services:
       - --port
       - "8000"
       - --reload
+      - --reload-dir
+      - /app/app
 
   model-server:
     volumes:
-      - ../backend:/app
+      - ../backend/model_server:/app/model_server
+      - model_server_dev_venv:/app/.venv
 
   chatbot:
     volumes:
-      - ../frontend/streamlit_ui:/app
+      - ../frontend/streamlit_ui:/app/src
+      - chatbot_dev_venv:/app/.venv
     command:
-      - uv
-      - run
       - streamlit
       - run
-      - app.py
+      - /app/src/app.py
       - --server.port=8501
       - --server.address=0.0.0.0
       - --server.runOnSave=true
+
+volumes:
+  api_dev_venv:
+  model_server_dev_venv:
+  chatbot_dev_venv:
