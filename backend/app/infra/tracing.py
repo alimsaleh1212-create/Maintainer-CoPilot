@@ -104,7 +104,7 @@ class TracingClient:
         public_key: str,
         secret_key: str,
         host: str,
-    ) -> "TracingClient":
+    ) -> TracingClient:
         """Construct a ``TracingClient`` from Vault-resolved keys.
 
         Falls back to no-op mode if:

@@ -12,7 +12,6 @@ Run with: pytest tests/integration/test_vault_refusal.py -v -s --timeout=120
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -31,43 +30,12 @@ class TestVaultRefusal:
         if not dockerfile.exists():
             pytest.skip("api.Dockerfile not found")
 
-        # Try to run the API image with an invalid Vault address
-        # (It will fail during startup validation)
-        cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "-e",
-            "VAULT_ADDR=http://nonexistent:8200",  # Invalid address
-            "-e",
-            "GEMINI_API_KEY=test",
-            "-e",
-            "OLLAMA_HOST=http://localhost:11434",
-            "-e",
-            "JWT_SIGNING_KEY=test",
-            "-e",
-            "DATABASE_URL=postgresql://test:test@localhost/test",
-            "-e",
-            "MINIO_ACCESS_KEY=test",
-            "-e",
-            "MINIO_SECRET_KEY=test",
-            "-e",
-            "LANGFUSE_PUBLIC_KEY=test",
-            "-e",
-            "LANGFUSE_SECRET_KEY=test",
-            # Build and run the image
-            "--entrypoint",
-            "python",
-            "-c",
-            "from app.config import get_settings; s = get_settings(); print('boot ok')",
-            "maintainers-copilot-backend",
-        ]
-
         # Act: Try to run with invalid Vault address
         # Note: This is a simplified test. Full integration would use docker-compose
         # with Vault stopped. For now, we test the config validation path.
-        from app.config import Settings
         from pydantic import ValidationError
+
+        from app.config import Settings
 
         # Simulate what happens when required Vault-resolved secrets are missing
         # In production, Vault resolves these; here we test the fallback to env vars

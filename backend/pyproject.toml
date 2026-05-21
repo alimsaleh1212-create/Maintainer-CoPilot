@@ -72,7 +72,12 @@ select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]   # asserts are how pytest tests express expectations
+"tests/**" = ["S101", "S106", "S603", "S607"]   # asserts + test credentials + subprocess are expected in tests
+"app/api/routes/**" = ["B008", "S105"]           # FastAPI Depends() in signatures is standard; "bearer" is not a secret
+"alembic/env.py" = ["E402"]                      # sys.path manipulation must precede alembic imports
+"scripts/**" = ["ASYNC240"]                       # one-shot scripts run under asyncio.run, not uvicorn
+"model_server/**" = ["ASYNC240"]                  # pathlib.Path for model loading is acceptable here
+"eval/**" = ["S101", "F401", "F541"]              # eval scripts use asserts and may have unused imports
 
 [tool.ruff.format]
 quote-style = "double"

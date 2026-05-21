@@ -8,8 +8,6 @@ Run with: pytest tests/integration/test_compose_boot.py -v -s --timeout=120
 
 from __future__ import annotations
 
-import asyncio
-import json
 import subprocess
 import time
 from pathlib import Path
@@ -101,7 +99,7 @@ class TestComposeBootHealthy:
                 conn.close()
                 print(f"✓ PostgreSQL healthy (attempt {attempt + 1})")
                 return
-            except Exception as e:
+            except Exception:
                 if attempt < max_retries - 1:
                     time.sleep(retry_interval)
                 continue
@@ -125,7 +123,7 @@ class TestComposeBootHealthy:
                 r.close()
                 print(f"✓ Redis healthy (attempt {attempt + 1})")
                 return
-            except Exception as e:
+            except Exception:
                 if attempt < max_retries - 1:
                     time.sleep(retry_interval)
                 continue
@@ -153,7 +151,7 @@ class TestComposeBootHealthy:
                 client.list_buckets()
                 print(f"✓ MinIO healthy (attempt {attempt + 1})")
                 return
-            except Exception as e:
+            except Exception:
                 if attempt < max_retries - 1:
                     time.sleep(retry_interval)
                 continue

@@ -136,8 +136,8 @@ async def lifespan(app: FastAPI) -> Any:
         sys.exit(1)
 
     try:
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
         import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(str(MODEL_DIR))
         model = AutoModelForSequenceClassification.from_pretrained(str(MODEL_DIR))

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.infra.llm.base import LLMClient
+from app.infra.tracing import TracingClient
 from app.services.chatbot import ChatbotService
 from app.services.classification import ClassificationService
 from app.services.memory import MemoryService
@@ -118,6 +119,19 @@ def get_rag_service(request: Request) -> RAGService:  # noqa: ARG001
     return RAGService()
 
 
+def get_tracer(request: Request) -> TracingClient:
+    """Return the TracingClient singleton from app.state.
+
+    Args:
+        request: FastAPI request (used to access app.state).
+
+    Returns:
+        TracingClient (may be in no-op mode if Langfuse keys are placeholders).
+    """
+    tracer: TracingClient = request.app.state.tracer
+    return tracer
+
+
 def get_primary_llm(request: Request) -> LLMClient:
     """Return the primary LLM client (Gemini) from app.state.
 
@@ -135,7 +149,7 @@ def get_primary_llm(request: Request) -> LLMClient:
 
 
 def get_chatbot_service(request: Request) -> ChatbotService:
-    """Return a ChatbotService with injected primary (Gemini) + fallback (Ollama) clients.
+    """Return a ChatbotService with injected primary (Gemini) + fallback (Ollama) + tracer.
 
     Args:
         request: FastAPI request (used to access app.state singletons).
@@ -146,6 +160,7 @@ def get_chatbot_service(request: Request) -> ChatbotService:
     return ChatbotService(
         primary_llm=request.app.state.gemini_client,
         fallback_llm=request.app.state.ollama_client,
+        tracer=request.app.state.tracer,
     )
 
 
@@ -162,3 +177,4 @@ WidgetServiceDep = Annotated[WidgetService, Depends(get_widget_service)]
 RAGServiceDep = Annotated[RAGService, Depends(get_rag_service)]
 ChatbotServiceDep = Annotated[ChatbotService, Depends(get_chatbot_service)]
 PrimaryLLMDep = Annotated[LLMClient, Depends(get_primary_llm)]
+TracerDep = Annotated[TracingClient, Depends(get_tracer)]

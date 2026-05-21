@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.rag import RAGService, SearchResult, SearchResults
+import pytest
+
 from app.domain.errors import ToolFailure
+from app.services.rag import RAGService, SearchResult, SearchResults
 
 
 @pytest.fixture

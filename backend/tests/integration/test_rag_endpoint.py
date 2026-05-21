@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.api.dependencies import get_db_session
 from app.api.main import create_app
@@ -33,7 +34,7 @@ def mock_rag_service():
 
 def test_search_endpoint_valid_request(client, mock_rag_service):
     """POST /rag/search with valid query returns 200 + results."""
-    from app.services.rag import SearchResults, SearchResult
+    from app.services.rag import SearchResult, SearchResults
 
     # Mock the RAG service
     mock_results = SearchResults(
@@ -111,7 +112,7 @@ def test_search_endpoint_query_too_long(client):
 
 def test_search_endpoint_response_schema(client):
     """POST /rag/search response matches SearchResponse schema."""
-    from app.services.rag import SearchResults, SearchResult
+    from app.services.rag import SearchResult, SearchResults
 
     mock_results = SearchResults(
         query="test",
@@ -170,7 +171,7 @@ def test_search_endpoint_default_top_k(client):
         "app.api.routes.rag.RAGService.search",
         return_value=mock_results,
     ) as mock_search:
-        response = client.post(
+        client.post(
             "/rag/search",
             json={"query": "test"},
         )

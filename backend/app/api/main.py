@@ -35,6 +35,7 @@ from app.config import Settings, get_settings
 from app.infra.llm.gemini import GeminiClient
 from app.infra.llm.ollama import OllamaClient
 from app.infra.redaction import structlog_redaction_processor
+from app.infra.tracing import TracingClient
 from app.infra.vault import VaultSecretMissing, VaultUnreachable
 from app.rag.embeddings import get_embedding_model
 
@@ -160,7 +161,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     # ------------------------------------------------------------------
-    # 6. Store singletons on app.state
+    # 6. Langfuse tracing (no-op graceful degradation when keys are placeholders)
+    # ------------------------------------------------------------------
+    tracer = TracingClient.from_keys(
+        public_key=settings.langfuse_public_key,
+        secret_key=settings.langfuse_secret_key,
+        host=settings.langfuse_host,
+    )
+
+    # ------------------------------------------------------------------
+    # 7. Store singletons on app.state
     # ------------------------------------------------------------------
     app.state.settings = settings
     app.state.engine = engine
@@ -169,14 +179,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.embedder = embedder
     app.state.gemini_client = gemini_client
     app.state.ollama_client = ollama_client
+    app.state.tracer = tracer
 
-    logger.info("startup_complete", services=["db", "redis", "embeddings", "llm"])
+    logger.info("startup_complete", services=["db", "redis", "embeddings", "llm", "tracing"])
 
     yield
 
     # ------------------------------------------------------------------
     # Shutdown — dispose connections gracefully
     # ------------------------------------------------------------------
+    await tracer.flush()
     await engine.dispose()
     await redis.aclose()
     await embedder.close()

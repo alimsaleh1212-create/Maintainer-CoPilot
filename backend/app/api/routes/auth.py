@@ -10,7 +10,7 @@ Token claims: ``sub`` (user_id as string), ``role``, ``exp``.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt as _bcrypt
 import structlog
@@ -89,7 +89,7 @@ def _verify_password(plain: str, hashed: str) -> bool:
 
 
 def _create_access_token(user_id: uuid.UUID, role: str, signing_key: str) -> str:
-    expire = datetime.now(tz=timezone.utc) + timedelta(minutes=_ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(tz=UTC) + timedelta(minutes=_ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": str(user_id),
         "role": role,
