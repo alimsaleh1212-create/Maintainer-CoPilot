@@ -70,9 +70,9 @@ class APIClient:
     # ------------------------------------------------------------------ auth endpoints
 
     def login(self, email: str, password: str) -> dict[str, Any]:
-        """POST /auth/jwt/login — returns {access_token, token_type}."""
+        """POST /auth/login — returns {access_token, token_type}."""
         resp = httpx.post(
-            f"{self._base}/auth/jwt/login",
+            f"{self._base}/auth/login",
             data={"username": email, "password": password},
             timeout=self._timeout,
         )
