@@ -195,3 +195,35 @@
 ---
 
 ## Next: WED Complete → THU Chatbot
+
+---
+
+## Parent–child retrieval: parent text in pgvector, not MinIO
+
+**Decision:** Store the full parent document inline on every `rag_chunks` row
+(`parent_text TEXT`, `parent_id VARCHAR(255)`), rather than fetching parents
+from MinIO at retrieval time.
+
+**Why:**
+
+| Dimension | Inline `parent_text` (chosen) | Parents in MinIO (rejected) |
+|---|---|---|
+| **Roundtrips per query** | 1 (the same SELECT that ranks chunks adds the parent column) | 2 (pgvector → MinIO `GetObject` per unique parent) |
+| **Tail latency** | `EXPLAIN ANALYZE` of the parent-expand SELECT on 5 chunks: <5 ms | MinIO `GetObject` on the local stack: 30–120 ms × N parents |
+| **Failure modes** | One store; if Postgres is down nothing works anyway | MinIO blip ⇒ chat answers go context-less; harder to surface |
+| **Consistency** | Children and parent text live in the same row, written by the same transaction | Two stores can drift; re-ingest needs explicit invalidation |
+| **Storage cost** | Wiki corpus is 1.2 MB total; denormalization ~10% overhead | "Save space" benefit is rounding error at this scale |
+| **Demo blast radius** | Single dependency for retrieval | Adds MinIO to the hot path of every chat turn |
+
+**MinIO is still the source of truth for the corpus blobs themselves**
+(raw `.md`, raw `.jsonl`) — re-ingest reads from MinIO. But MinIO is **out of
+the request path**: once a chunk is in `rag_chunks`, retrieval needs Postgres
+only. That keeps MinIO failures from cascading into the chat surface.
+
+**When to revisit:** if parent docs ever grow past ~50 KB each (current max
+is the Developer-Guide-Transforms.md at ~12 KB), the denormalization cost
+overtakes the latency benefit. Move to a `rag_parents` table at that point
+with a single JOIN — still one roundtrip, one Postgres.
+
+**Cross-link:** [[ARCH.md#retrieval]] for the pipeline; [[citations.py]] for
+the deterministic citation builder that consumes these rows.

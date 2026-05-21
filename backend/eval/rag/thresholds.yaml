@@ -1,0 +1,13 @@
+# RAG eval thresholds — must be met for CI to pass
+# Updated 2026-05-21 after ablation study on MONAI corpus (3040 chunks)
+
+faithfulness: 0.80      # RAGAS: answer grounded in retrieved context
+answer_relevancy: 0.75  # RAGAS: answer is relevant to question
+hit_at_5: 0.70          # Retrieval: ground-truth chunk in top-5
+rationale: |
+  Thresholds chosen for MONAI docs + issue retrieval use case.
+  Faithfulness: Medical docs are precise; 0.80 ensures grounding.
+  Answer relevancy: MONAI questions are technical; 0.75 = high semantic match.
+  Hit@5: With multi-query + hybrid retrieval, 70% Hit@5 on golden set is realistic.
+  Ablation results (2026-05-21): all 4 configs achieved 80% Hit@5 on 10-probe set,
+  confirming the 70% threshold is achievable and the corpus has sufficient signal.

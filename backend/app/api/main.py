@@ -243,7 +243,9 @@ def create_app() -> FastAPI:
 
     # Serve the React widget bundle (iframe src) at /static/widget/
     if _WIDGET_STATIC_DIR.exists():
-        app.mount("/static/widget", StaticFiles(directory=str(_WIDGET_STATIC_DIR)), name="widget_static")
+        app.mount(
+            "/static/widget", StaticFiles(directory=str(_WIDGET_STATIC_DIR)), name="widget_static"
+        )
 
     return app
 

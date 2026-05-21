@@ -35,7 +35,9 @@ logging.basicConfig(level=logging.INFO)
 #   1. CLASSIFIER_MODEL_DIR env var (explicit local path — for dev bind-mount)
 #   2. Download from MinIO if MINIO_ENDPOINT + MINIO_MODEL_PREFIX are set
 #   3. Fallback: sibling ml/ directory (local dev without Docker)
-_DEFAULT_MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "ml" / "artifacts" / "classifier" / "best"
+_DEFAULT_MODEL_DIR = (
+    Path(__file__).resolve().parent.parent.parent / "ml" / "artifacts" / "classifier" / "best"
+)
 MODEL_DIR = Path(os.getenv("CLASSIFIER_MODEL_DIR", str(_DEFAULT_MODEL_DIR)))
 
 # MinIO pull config (download weights on container start)
@@ -66,14 +68,16 @@ def _pull_model_from_minio(dest: Path) -> bool:
             logger.warning("minio.bucket_missing", bucket=_MINIO_BUCKET)
             return False
 
-        objects = list(client.list_objects(_MINIO_BUCKET, prefix=_MINIO_MODEL_PREFIX, recursive=True))
+        objects = list(
+            client.list_objects(_MINIO_BUCKET, prefix=_MINIO_MODEL_PREFIX, recursive=True)
+        )
         if not objects:
             logger.warning("minio.no_objects", prefix=_MINIO_MODEL_PREFIX)
             return False
 
         dest.mkdir(parents=True, exist_ok=True)
         for obj in objects:
-            rel = obj.object_name[len(_MINIO_MODEL_PREFIX):].lstrip("/")
+            rel = obj.object_name[len(_MINIO_MODEL_PREFIX) :].lstrip("/")
             if not rel:
                 continue
             local = dest / rel
@@ -214,12 +218,14 @@ async def ner(req: NERRequest) -> dict[str, list[dict[str, str]]]:
     ]
     for pattern, label in patterns:
         for m in re.finditer(pattern, req.text):
-            entities.append({
-                "text": m.group(0),
-                "label": label,
-                "start": str(m.start()),
-                "end": str(m.end()),
-            })
+            entities.append(
+                {
+                    "text": m.group(0),
+                    "label": label,
+                    "start": str(m.start()),
+                    "end": str(m.end()),
+                }
+            )
 
     return {"entities": entities}
 

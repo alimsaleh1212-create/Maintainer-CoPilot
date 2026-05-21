@@ -172,11 +172,13 @@ class OllamaClient:
                 result.append(entry)
 
             elif role == "tool":
-                result.append({
-                    "role": "tool",
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                    "content": content,
-                })
+                result.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.get("tool_call_id", ""),
+                        "content": content,
+                    }
+                )
 
         return result
 

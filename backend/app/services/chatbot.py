@@ -159,7 +159,9 @@ class ChatbotService:
         rag_service: RAGService,
         db_session: Any,
         top_k_memories: int = 3,
-    ) -> tuple[str, list[str]]:
+        rag_source_types: list[str] | None = None,
+        rag_min_confidence: float = 0.30,
+    ) -> tuple[str, list[str], list[dict[str, Any]]]:
         """Run one user turn through the tool-calling loop.
 
         Args:
@@ -197,6 +199,9 @@ class ChatbotService:
 
         # 4. Tool-call loop
         tools_used: list[str] = []
+        # Citations are accumulated across any rag_search calls this turn,
+        # deduplicated by chunk_id when we return so the UI gets a clean list.
+        citations: list[dict[str, Any]] = []
         final_response = ""
         assistant_content = ""
 
@@ -209,14 +214,16 @@ class ChatbotService:
                 break
 
             # Append the assistant turn (with function calls) to history.
-            messages.append({
-                "role": "assistant",
-                "content": text,
-                "tool_calls": [
-                    {"name": tc.name, "arguments": tc.arguments, "id": tc.id}
-                    for tc in tool_calls
-                ],
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": text,
+                    "tool_calls": [
+                        {"name": tc.name, "arguments": tc.arguments, "id": tc.id}
+                        for tc in tool_calls
+                    ],
+                }
+            )
 
             # Execute each tool and append results.
             for tc in tool_calls:
@@ -229,15 +236,20 @@ class ChatbotService:
                     rag_service=rag_service,
                     db_session=db_session,
                     trace=trace,
+                    rag_source_types=rag_source_types,
+                    rag_min_confidence=rag_min_confidence,
+                    citations_out=citations,
                 )
                 tools_used.append(tc.name)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "tool_name": tc.name,
-                    "content": json.dumps(result),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "tool_name": tc.name,
+                        "content": json.dumps(result),
+                    }
+                )
         else:
             logger.warning(
                 "chatbot.max_tool_rounds_exceeded",
@@ -249,7 +261,19 @@ class ChatbotService:
 
         # 5. Persist to Redis (redact before write)
         await memory_service.append_message(conversation_id, "user", redact_text(user_message))
-        await memory_service.append_message(conversation_id, "assistant", redact_text(final_response))
+        await memory_service.append_message(
+            conversation_id, "assistant", redact_text(final_response)
+        )
+
+        # Deduplicate citations by chunk_id, preserve first occurrence
+        seen: set[str] = set()
+        dedup_citations: list[dict[str, Any]] = []
+        for cite in citations:
+            cid = str(cite.get("chunk_id") or "")
+            if cid and cid in seen:
+                continue
+            seen.add(cid)
+            dedup_citations.append(cite)
 
         logger.info(
             "chatbot.turn_complete",
@@ -257,8 +281,9 @@ class ChatbotService:
             user_id=str(user_id),
             tools_used=tools_used,
             response_length=len(final_response),
+            citation_count=len(dedup_citations),
         )
-        return final_response, tools_used
+        return final_response, tools_used, dedup_citations
 
     # ------------------------------------------------------------------
     # LLM call — primary (Gemini) with Ollama fallback
@@ -318,6 +343,9 @@ class ChatbotService:
         rag_service: RAGService,
         db_session: Any,
         trace: Any = None,
+        rag_source_types: list[str] | None = None,
+        rag_min_confidence: float = 0.30,
+        citations_out: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Dispatch a tool call and return a structured result.
 
@@ -356,11 +384,36 @@ class ChatbotService:
                         db_session=db_session,
                         gemini_api_key="",  # RAG uses Ollama embedder; key unused
                         top_k=int(tool_args.get("top_k", 5)),
+                        source_types=rag_source_types,
+                        min_citation_confidence=rag_min_confidence,
                     )
+                    # Accumulate citations for the chat response
+                    if citations_out is not None:
+                        for cite in search_results.citations:
+                            citations_out.append(cite.to_dict())
+                    # Pass parent context (when available) to the LLM so it
+                    # can ground answers in the full doc, not just the snippet.
                     return {
                         "query": search_results.query,
                         "chunks": [
-                            {"text": c.text, "source": c.source, "score": c.score}
+                            {
+                                "text": c.parent_text or c.text,
+                                "source": c.source,
+                                "source_type": (
+                                    c.metadata.get("source_type")
+                                    if isinstance(c.metadata, dict)
+                                    else None
+                                ),
+                                "score": c.score,
+                                "citation_id": next(
+                                    (
+                                        cite.id
+                                        for cite in search_results.citations
+                                        if cite.chunk_id == c.chunk_id
+                                    ),
+                                    None,
+                                ),
+                            }
                             for c in search_results.chunks
                         ],
                     }

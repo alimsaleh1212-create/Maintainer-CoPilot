@@ -20,8 +20,8 @@ import yaml
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _BACKEND_ROOT = Path(__file__).parent.parent.parent
-_EVAL_DIR = _BACKEND_ROOT / "eval"
-_THRESHOLDS_PATH = _EVAL_DIR / "eval_thresholds.yaml"
+_EVAL_DIR = _BACKEND_ROOT / "eval" / "classification"
+_THRESHOLDS_PATH = _EVAL_DIR / "thresholds.yaml"
 _EVAL_REPORT_PATH = _BACKEND_ROOT.parent / "ml" / "artifacts" / "eval_report.json"
 
 
@@ -33,7 +33,7 @@ def thresholds() -> dict:
     """Load committed classification thresholds."""
     with open(_THRESHOLDS_PATH) as f:
         data: dict = yaml.safe_load(f)
-    return data["classification"]
+    return data
 
 
 @pytest.fixture(scope="module")

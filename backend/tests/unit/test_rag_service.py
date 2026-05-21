@@ -36,6 +36,9 @@ def mock_retriever():
                 source="docs",
                 score=0.95,
                 rerank_score=None,
+                parent_id=None,
+                parent_text=None,
+                metadata={"source_type": "docs"},
             ),
             MagicMock(
                 chunk_id="chunk_2",
@@ -43,6 +46,9 @@ def mock_retriever():
                 source="issue",
                 score=0.87,
                 rerank_score=None,
+                parent_id=None,
+                parent_text=None,
+                metadata={"source_type": "issue"},
             ),
         ]
     )

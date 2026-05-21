@@ -198,31 +198,36 @@ def inject_styles() -> None:
 
 
 def page_header(title: str, subtitle: str = "", icon_svg: str = "") -> None:
-    """Render a consistent page header with optional icon and subtitle."""
-    icon_html = f"""
-    <div style="
-        width:42px;height:42px;border-radius:12px;
-        background:linear-gradient(135deg,#22c55e,#16a34a);
-        display:flex;align-items:center;justify-content:center;
-        flex-shrink:0;
-    ">{icon_svg}</div>
-    """ if icon_svg else ""
+    """Render a consistent page header with optional icon and subtitle.
 
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:1.5rem;">
-            {icon_html}
-            <div>
-                <h1 style="
-                    margin:0;font-size:1.5rem;font-weight:700;
-                    color:#f1f5f9;letter-spacing:-0.02em;line-height:1.2;
-                ">{title}</h1>
-                {"<p style='margin:4px 0 0;font-size:0.875rem;color:#64748b;'>" + subtitle + "</p>" if subtitle else ""}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    Important: the rendered HTML is emitted as a single un-indented string —
+    Streamlit's markdown parser treats any line indented 4+ spaces as a code
+    block, even with ``unsafe_allow_html=True``. Keep this on one line.
+    """
+    icon_html = (
+        '<div style="width:42px;height:42px;border-radius:12px;'
+        "background:linear-gradient(135deg,#22c55e,#16a34a);"
+        "display:flex;align-items:center;justify-content:center;"
+        f'flex-shrink:0;">{icon_svg}</div>'
+        if icon_svg
+        else ""
     )
+    subtitle_html = (
+        f"<p style=\"margin:4px 0 0;font-size:0.875rem;color:#64748b;\">{subtitle}</p>"
+        if subtitle
+        else ""
+    )
+    html = (
+        '<div style="display:flex;align-items:center;gap:14px;margin-bottom:1.5rem;">'
+        f"{icon_html}"
+        "<div>"
+        '<h1 style="margin:0;font-size:1.5rem;font-weight:700;'
+        'color:#f1f5f9;letter-spacing:-0.02em;line-height:1.2;">'
+        f"{title}</h1>"
+        f"{subtitle_html}"
+        "</div></div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def card(content_html: str, padding: str = "1.25rem") -> None:
@@ -244,4 +249,78 @@ def badge(text: str, color: str = "#22c55e") -> str:
     return (
         f'<span style="background:{color}20;color:{color};border:1px solid {color}50;'
         f'border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;">{text}</span>'
+    )
+
+
+_WIKI_ICON = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>'
+    '<polyline points="14 2 14 8 20 8"/></svg>'
+)
+_ISSUE_ICON = (
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+    '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>'
+    '<line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
+)
+
+
+def render_citations(citations: list[dict]) -> None:
+    """Render citation chips under an assistant message.
+
+    Each citation is a single-line clickable chip:
+        [icon] Label · score · "snippet…"
+
+    Wiki citations use a blue accent; issues use an amber accent.
+    Click → opens the source URL in a new tab.
+    """
+    if not citations:
+        return
+
+    chips_html = (
+        '<div style="margin-top:0.75rem;display:flex;flex-direction:column;'
+        'gap:0.4rem;border-left:2px solid #1e293b;padding-left:0.85rem;">'
+        '<div style="font-size:0.65rem;color:#64748b;text-transform:uppercase;'
+        'letter-spacing:0.08em;font-weight:600;">Sources</div>'
+    )
+    for c in citations:
+        is_wiki = c.get("source_type") == "wiki"
+        accent = "#3b82f6" if is_wiki else "#f59e0b"
+        icon = _WIKI_ICON if is_wiki else _ISSUE_ICON
+        label = _esc(c.get("label", "Source"))
+        score = float(c.get("score") or 0.0)
+        snippet = _esc(c.get("snippet", ""))[:200]
+        url = c.get("url") or "#"
+        cite_id = c.get("id", "?")
+        chips_html += (
+            f'<a href="{url}" target="_blank" rel="noopener" '
+            f'style="text-decoration:none;display:block;background:#1e293b;'
+            f'border:1px solid #2d3f55;border-left:3px solid {accent};'
+            f'border-radius:8px;padding:0.6rem 0.75rem;transition:all 0.15s;'
+            f'cursor:pointer;" '
+            f"onmouseover=\"this.style.background='#243349'\" "
+            f"onmouseout=\"this.style.background='#1e293b'\">"
+            f'<div style="display:flex;align-items:center;gap:0.5rem;'
+            f'font-size:0.75rem;font-weight:600;color:{accent};'
+            f'margin-bottom:0.25rem;">'
+            f'<span style="background:{accent}20;color:{accent};border-radius:4px;'
+            f'padding:1px 6px;font-size:0.65rem;">[{cite_id}]</span>'
+            f"{icon}<span>{label}</span>"
+            f'<span style="margin-left:auto;color:#64748b;font-weight:500;'
+            f'font-size:0.7rem;">score {score:.2f}</span></div>'
+            f'<div style="color:#94a3b8;font-size:0.75rem;line-height:1.45;">'
+            f"{snippet}</div></a>"
+        )
+    chips_html += "</div>"
+    st.markdown(chips_html, unsafe_allow_html=True)
+
+
+def _esc(s: str) -> str:
+    """Minimal HTML escape for user-facing strings inside our chips."""
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
     )

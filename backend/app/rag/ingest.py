@@ -1,264 +1,252 @@
-"""Corpus ingestion: fetch docs and issues, chunk, embed, store in pgvector."""
+"""Corpus ingestion: chunk → embed → upsert into pgvector with parent context."""
 
 from __future__ import annotations
 
-import hashlib
+import json
 from typing import Any
 
 import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.rag.chunking import MarkdownChunker
+from app.rag.chunking import Chunk, IssueChunker, MarkdownChunker
 from app.rag.embeddings import EmbeddingModel
 
 logger = structlog.get_logger(__name__)
 
+# Batched embed cuts per-item latency from ~1 HTTP roundtrip to ~1/N.
+# Ollama's /api/embed handles the batch on its end without recompute overhead.
+EMBED_BATCH = 32
+
 
 class CorpusIngestor:
-    """Ingest MONAI docs and issues into pgvector corpus.
+    """Walks issues + wiki files, produces chunks, embeds, writes rows.
 
-    Sources:
-    1. Static markdown files (documentation)
-    2. GitHub issues (resolved, from outside training set)
+    Each row stores both the (small) child text *and* a reference back to
+    the (big) parent — denormalized for one-roundtrip parent-document
+    retrieval at query time.
     """
 
     def __init__(self) -> None:
-        self.chunker = MarkdownChunker()
+        self.issue_chunker = IssueChunker()
+        self.markdown_chunker = MarkdownChunker()
 
-    async def ingest_docs(
-        self,
-        docs: list[tuple[str, str]],  # [(title, content), ...]
-        embedder: EmbeddingModel,
-        db_session: AsyncSession,
-    ) -> dict[str, int]:
-        """Ingest documentation files.
-
-        Args:
-            docs: List of (title, content) tuples
-            embedder: EmbeddingModel instance
-            db_session: SQLAlchemy async session
-
-        Returns:
-            Ingestion stats: {docs_count, chunks_count, errors_count}
-        """
-        logger.info("corpus_ingest.docs_start", docs_count=len(docs))
-
-        stats = {"docs_count": 0, "chunks_count": 0, "errors_count": 0}
-
-        for title, content in docs:
-            try:
-                # Chunk the document
-                chunks = self.chunker.chunk(content, source=title)
-
-                for chunk in chunks:
-                    try:
-                        # Embed the chunk
-                        embedding = await embedder.embed(chunk.text)
-
-                        # Create tsvector content
-                        tsvector_text = f"{chunk.text} {title}"
-
-                        # Insert into database
-                        chunk_id = self._generate_chunk_id(title, chunk.text)
-                        doc_metadata: dict[str, Any] = {"title": title, **chunk.metadata}
-                        await self._insert_chunk(
-                            db_session=db_session,
-                            chunk_id=chunk_id,
-                            content=chunk.text,
-                            source="docs",
-                            embedding=embedding,
-                            tsvector_text=tsvector_text,
-                            metadata=doc_metadata,
-                        )
-
-                        stats["chunks_count"] += 1
-
-                    except Exception as exc:
-                        logger.exception(
-                            "corpus_ingest.chunk_failed",
-                            title=title,
-                            error=str(exc),
-                        )
-                        stats["errors_count"] += 1
-
-                stats["docs_count"] += 1
-
-            except Exception as exc:
-                logger.exception(
-                    "corpus_ingest.doc_failed",
-                    title=title,
-                    error=str(exc),
-                )
-                stats["errors_count"] += 1
-
-        logger.info("corpus_ingest.docs_complete", **stats)
-        return stats
+    # ── Issues ────────────────────────────────────────────────────────────────
 
     async def ingest_issues(
         self,
-        issues: list[dict[str, Any]],  # [{id, title, body, labels}, ...]
+        issues: list[dict[str, Any]],
         embedder: EmbeddingModel,
         db_session: AsyncSession,
         exclude_issue_ids: set[int] | None = None,
     ) -> dict[str, int]:
-        """Ingest resolved issues (NOT in training set).
+        """Ingest closed issues as single-chunk parents.
 
         Args:
-            issues: List of issue dicts
-            embedder: EmbeddingModel instance
-            db_session: SQLAlchemy async session
-            exclude_issue_ids: Issue IDs to skip (training/test splits)
+            issues: Decoded rows from raw_issues.jsonl.
+            embedder: Embedding client.
+            db_session: SQLAlchemy async session.
+            exclude_issue_ids: Issue numbers to skip (e.g., RAG golden set IDs
+                to prevent retrieval/eval leakage).
 
         Returns:
-            Ingestion stats: {issues_count, chunks_count, errors_count}
+            Stats dict ``{ingested, skipped, errors}``.
         """
-        logger.info("corpus_ingest.issues_start", total=len(issues))
+        excluded = exclude_issue_ids or set()
+        stats = {"ingested": 0, "skipped": 0, "errors": 0, "already_present": 0}
+        logger.info("corpus_ingest.issues_start", total=len(issues), excluded=len(excluded))
 
-        stats = {"issues_count": 0, "chunks_count": 0, "errors_count": 0}
-
-        if exclude_issue_ids is None:
-            exclude_issue_ids = set()
-
+        # Pre-build chunks so we can dedupe against the DB before embedding
+        candidate: list[Chunk] = []
         for issue in issues:
-            issue_id = issue.get("id")
-
-            if issue_id in exclude_issue_ids:
+            number = issue.get("number") or issue.get("id")
+            if number in excluded:
+                stats["skipped"] += 1
                 continue
+            chunk = self.issue_chunker.chunk(issue)
+            if len(chunk.text) < 50:
+                stats["skipped"] += 1
+                continue
+            candidate.append(chunk)
 
+        # Skip chunks already in the DB — saves the slow embed roundtrip
+        existing = await self._existing_chunk_ids(
+            db_session, [c.chunk_id for c in candidate]
+        )
+        pending = [c for c in candidate if c.chunk_id not in existing]
+        stats["already_present"] = len(candidate) - len(pending)
+        logger.info(
+            "corpus_ingest.issues_dedup",
+            candidate=len(candidate),
+            already_present=stats["already_present"],
+            new=len(pending),
+        )
+
+        ok, errs = await self._embed_and_upsert_batched(pending, embedder, db_session)
+        stats["ingested"] += ok
+        stats["errors"] += errs
+
+        logger.info("corpus_ingest.issues_done", **stats)
+        return stats
+
+    # ── Wiki pages ────────────────────────────────────────────────────────────
+
+    async def ingest_wiki(
+        self,
+        wiki_files: list[tuple[str, str]],  # [(relative_path, content), ...]
+        embedder: EmbeddingModel,
+        db_session: AsyncSession,
+    ) -> dict[str, int]:
+        """Ingest wiki markdown files as parent-document chunks.
+
+        Args:
+            wiki_files: Pairs of (file_path_within_corpus, raw_markdown).
+            embedder: Embedding client.
+            db_session: SQLAlchemy async session.
+
+        Returns:
+            Stats dict ``{files, chunks, errors}``.
+        """
+        stats = {"files": 0, "chunks": 0, "errors": 0, "already_present": 0}
+        logger.info("corpus_ingest.wiki_start", files=len(wiki_files))
+
+        candidate: list[Chunk] = []
+        for file_path, content in wiki_files:
             try:
-                # Create document from issue title + body
-                title = issue.get("title", "")
-                body = issue.get("body", "")
-                document = f"# {title}\n\n{body}"
+                chunks = self.markdown_chunker.chunk(content, file_path=file_path)
+                candidate.extend(chunks)
+                stats["files"] += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("corpus_ingest.wiki_failed", file=file_path, error=str(exc))
+                stats["errors"] += 1
 
-                # Chunk the issue
-                chunks = self.chunker.chunk(document, source=f"issue_{issue_id}")
+        existing = await self._existing_chunk_ids(
+            db_session, [c.chunk_id for c in candidate]
+        )
+        pending = [c for c in candidate if c.chunk_id not in existing]
+        stats["already_present"] = len(candidate) - len(pending)
+        logger.info(
+            "corpus_ingest.wiki_dedup",
+            candidate=len(candidate),
+            already_present=stats["already_present"],
+            new=len(pending),
+        )
 
-                for chunk in chunks:
-                    try:
-                        # Embed the chunk
-                        embedding = await embedder.embed(chunk.text)
+        ok, errs = await self._embed_and_upsert_batched(pending, embedder, db_session)
+        stats["chunks"] += ok
+        stats["errors"] += errs
 
-                        # Create tsvector content
-                        tsvector_text = f"{title} {chunk.text}"
+        logger.info("corpus_ingest.wiki_done", **stats)
+        return stats
 
-                        # Create record with issue metadata
-                        chunk_id = self._generate_chunk_id(
-                            f"issue_{issue_id}", chunk.text
-                        )
-                        metadata = {
-                            "issue_id": str(issue_id),
-                            "labels": ",".join(issue.get("labels", [])),
-                            **chunk.metadata,
-                        }
+    # ── Dedup helper ─────────────────────────────────────────────────────────
 
-                        await self._insert_chunk(
-                            db_session=db_session,
-                            chunk_id=chunk_id,
-                            content=chunk.text,
-                            source="issue",
-                            embedding=embedding,
-                            tsvector_text=tsvector_text,
-                            metadata=metadata,
-                        )
+    @staticmethod
+    async def _existing_chunk_ids(
+        db_session: AsyncSession,
+        chunk_ids: list[str],
+    ) -> set[str]:
+        """Return the subset of ``chunk_ids`` that already exist in rag_chunks.
 
-                        stats["chunks_count"] += 1
+        Used to skip re-embedding chunks we already have, so re-runs are
+        ~free instead of slow no-op upserts.
+        """
+        if not chunk_ids:
+            return set()
+        stmt = text(
+            "SELECT chunk_id FROM rag_chunks WHERE chunk_id = ANY(:ids)"
+        ).bindparams(ids=chunk_ids)
+        rows = (await db_session.execute(stmt)).fetchall()
+        return {row.chunk_id for row in rows}
 
-                    except Exception as exc:
-                        logger.exception(
-                            "corpus_ingest.issue_chunk_failed",
-                            issue_id=issue_id,
-                            error=str(exc),
-                        )
-                        stats["errors_count"] += 1
+    # ── Embed + upsert in batches ────────────────────────────────────────────
 
-                stats["issues_count"] += 1
+    async def _embed_and_upsert_batched(
+        self,
+        chunks: list[Chunk],
+        embedder: EmbeddingModel,
+        db_session: AsyncSession,
+    ) -> tuple[int, int]:
+        """Embed in batches of EMBED_BATCH, then upsert each row.
 
-            except Exception as exc:
+        Returns (ingested_count, error_count).
+        """
+        ingested = 0
+        errors = 0
+        for i in range(0, len(chunks), EMBED_BATCH):
+            batch = chunks[i : i + EMBED_BATCH]
+            try:
+                embeddings = await embedder.embed_batch([c.text for c in batch])
+            except Exception as exc:  # noqa: BLE001
                 logger.exception(
-                    "corpus_ingest.issue_failed",
-                    issue_id=issue_id,
+                    "corpus_ingest.embed_batch_failed",
+                    batch_index=i // EMBED_BATCH,
+                    batch_size=len(batch),
                     error=str(exc),
                 )
-                stats["errors_count"] += 1
+                errors += len(batch)
+                continue
+            for chunk, embedding in zip(batch, embeddings, strict=True):
+                try:
+                    await self._upsert(db_session, chunk, embedding)
+                    ingested += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "corpus_ingest.upsert_failed",
+                        chunk_id=chunk.chunk_id,
+                        error=str(exc),
+                    )
+                    errors += 1
+        return ingested, errors
 
-        logger.info("corpus_ingest.issues_complete", **stats)
-        return stats
+    # ── DB write ─────────────────────────────────────────────────────────────
 
-    async def verify_corpus(self, db_session: AsyncSession) -> dict[str, int]:
-        """Verify corpus is indexed correctly.
-
-        Args:
-            db_session: SQLAlchemy async session
-
-        Returns:
-            Stats: {total_chunks, indexed_chunks, unindexed_chunks}
-        """
-        # Count total chunks
-        total_result = await db_session.execute(text("SELECT COUNT(*) FROM rag_chunks"))
-        total = total_result.scalar() or 0
-
-        # Count chunks with embeddings
-        indexed_result = await db_session.execute(
-            text("SELECT COUNT(*) FROM rag_chunks WHERE embedding IS NOT NULL")
-        )
-        indexed = indexed_result.scalar() or 0
-
-        stats = {
-            "total_chunks": int(total),
-            "indexed_chunks": int(indexed),
-            "unindexed_chunks": int(total) - int(indexed),
-        }
-
-        logger.info("corpus_ingest.verify_complete", **stats)
-        return stats
-
-    async def _insert_chunk(
+    async def _upsert(
         self,
         db_session: AsyncSession,
-        chunk_id: str,
-        content: str,
-        source: str,
+        chunk: Chunk,
         embedding: list[float],
-        tsvector_text: str,
-        metadata: dict[str, str],
     ) -> None:
-        """Insert a single chunk into the database.
-
-        Args:
-            db_session: SQLAlchemy async session
-            chunk_id: Unique chunk identifier
-            content: Chunk text content
-            source: "docs" or "issue"
-            embedding: Vector embedding
-            tsvector_text: Text for tsvector indexing
-            metadata: Additional metadata
-        """
-        import json as _json
-
-        # pgvector expects "[f1, f2, ...]" format; use CAST() not :: so SQLAlchemy
-        # can parse the named parameters correctly.
+        """Idempotent insert (ON CONFLICT chunk_id DO UPDATE)."""
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+        metadata_json = json.dumps(_serialize_metadata(chunk.metadata))
+        # tsvector uses the chunk's own text — search hits the same content
+        # the LLM will eventually see.
         stmt = text(
-            "INSERT INTO rag_chunks (chunk_id, text, source, embedding, tsvector, metadata) "
-            "VALUES (:chunk_id, :content, :source, CAST(:embedding AS vector), "
-            "to_tsvector('english', :tsvector_text), CAST(:metadata AS jsonb)) "
-            "ON CONFLICT (chunk_id) DO NOTHING"
+            "INSERT INTO rag_chunks "
+            "(chunk_id, text, source, embedding, tsvector, metadata, parent_id, parent_text) "
+            "VALUES (:chunk_id, :text, :source, CAST(:embedding AS vector), "
+            "to_tsvector('english', :tsvector_text), CAST(:metadata AS jsonb), "
+            ":parent_id, :parent_text) "
+            "ON CONFLICT (chunk_id) DO UPDATE SET "
+            "  text = EXCLUDED.text, "
+            "  embedding = EXCLUDED.embedding, "
+            "  tsvector = EXCLUDED.tsvector, "
+            "  metadata = EXCLUDED.metadata, "
+            "  parent_id = EXCLUDED.parent_id, "
+            "  parent_text = EXCLUDED.parent_text"
         ).bindparams(
-            chunk_id=chunk_id,
-            content=content,
-            source=source,
+            chunk_id=chunk.chunk_id,
+            text=chunk.text,
+            source=chunk.source,
             embedding=embedding_str,
-            tsvector_text=tsvector_text,
-            metadata=_json.dumps(metadata),
+            tsvector_text=chunk.text,
+            metadata=metadata_json,
+            parent_id=chunk.parent_id,
+            parent_text=chunk.parent_text,
         )
-
         await db_session.execute(stmt)
         await db_session.commit()
 
-    @staticmethod
-    def _generate_chunk_id(source: str, text: str) -> str:
-        """Generate a unique chunk ID from source and text hash."""
-        hash_str = hashlib.sha256(text.encode()).hexdigest()[:16]
-        return f"{source}_{hash_str}"
+
+def _serialize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Drop None values and coerce non-JSON types to strings."""
+    out: dict[str, Any] = {}
+    for k, v in metadata.items():
+        if v is None:
+            continue
+        if isinstance(v, (str, int, float, bool, list, dict)):
+            out[k] = v
+        else:
+            out[k] = str(v)
+    return out

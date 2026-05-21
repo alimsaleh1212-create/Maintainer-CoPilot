@@ -133,9 +133,7 @@ class RedisClient:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"Redis key {key!r} contains invalid JSON: {exc}"
-            ) from exc
+            raise RuntimeError(f"Redis key {key!r} contains invalid JSON: {exc}") from exc
 
     async def set_json(
         self,
@@ -156,7 +154,5 @@ class RedisClient:
         try:
             value = json.dumps(data, ensure_ascii=False)
         except (TypeError, ValueError) as exc:
-            raise RuntimeError(
-                f"Cannot JSON-serialise data for Redis key {key!r}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Cannot JSON-serialise data for Redis key {key!r}: {exc}") from exc
         await self.set(key, value, ex=ex)

@@ -1,0 +1,10 @@
+# Classification eval thresholds — must be met for CI to pass
+# Updated 2026-05-20 after three-way comparison on MONAI dataset
+
+macro_f1: 0.75          # DistilBERT achieved 0.764
+per_class_f1_min: 0.55  # Support class achieved 0.5825; bug/feature well above 0.80
+rationale: |
+  DistilBERT was the winner on macro-F1 (0.764 > classical 0.7228 > LLM 0.6439).
+  Support class underperforms (278 merged examples from documentation+questions)
+  due to small test set (64 support examples → high variance).
+  Thresholds are set defensibly above zero but allow for statistical noise.

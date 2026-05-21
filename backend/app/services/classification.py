@@ -65,7 +65,9 @@ class ClassificationService:
 
             label_raw: str = data.get("label", "support")
             # Coerce to a valid ClassLabel; fall back to "support" on unknown value.
-            label: ClassLabel = label_raw if label_raw in ("bug", "feature", "support") else "support"  # type: ignore[assignment]
+            label: ClassLabel = (
+                label_raw if label_raw in ("bug", "feature", "support") else "support"
+            )  # type: ignore[assignment]
 
             result = ClassificationResult(
                 label=label,

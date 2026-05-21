@@ -51,6 +51,7 @@ echo "[vault-init] Reading secrets from $ENV_FILE"
 #    secret leakage if .env accumulates unrelated variables.
 # -----------------------------------------------------------------------------
 ARGS=""
+_POSTGRES_PASSWORD="copilot"   # default; overridden below if present in .env
 
 while IFS= read -r line || [ -n "$line" ]; do
   # Skip blank lines and comments
@@ -77,6 +78,11 @@ while IFS= read -r line || [ -n "$line" ]; do
     LANGFUSE_PUBLIC_KEY) vault_key="langfuse_public_key" ;;
     LANGFUSE_SECRET_KEY) vault_key="langfuse_secret_key" ;;
     GITHUB_TOKEN)        vault_key="github_token" ;;
+    POSTGRES_PASSWORD)
+      vault_key="postgres_password"
+      # Also capture for DATABASE_URL construction below.
+      [ -n "$value" ] && _POSTGRES_PASSWORD="$value"
+      ;;
     *)                   continue ;;
   esac
 
@@ -91,10 +97,12 @@ done < "$ENV_FILE"
 
 # -----------------------------------------------------------------------------
 # 4. Add compose-fixed infra connections (depend on the docker network, so
-#    they belong in the compose file rather than .env)
+#    they belong in the compose file rather than .env).
+#    DATABASE_URL is built from the captured POSTGRES_PASSWORD so it is never
+#    hardcoded here.
 # -----------------------------------------------------------------------------
 ARGS="$ARGS ollama_host=http://ollama:11434"
-ARGS="$ARGS database_url=postgresql+asyncpg://copilot:copilot@db:5432/copilot"
+ARGS="$ARGS database_url=postgresql+asyncpg://copilot:${_POSTGRES_PASSWORD}@db:5432/copilot"
 
 # -----------------------------------------------------------------------------
 # 5. Apply defaults for any required key still missing
@@ -122,6 +130,10 @@ esac
 case "$ARGS" in
   *minio_secret_key=*)    ;;
   *) ARGS="$ARGS minio_secret_key=minioadmin" ;;
+esac
+case "$ARGS" in
+  *postgres_password=*)   ;;
+  *) ARGS="$ARGS postgres_password=${_POSTGRES_PASSWORD}" ;;
 esac
 case "$ARGS" in
   *langfuse_public_key=*) ;;

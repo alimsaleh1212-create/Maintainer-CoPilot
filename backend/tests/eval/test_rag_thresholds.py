@@ -29,10 +29,10 @@ import yaml
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _BACKEND_ROOT = Path(__file__).parent.parent.parent
-_EVAL_DIR = _BACKEND_ROOT / "eval"
-_THRESHOLDS_PATH = _EVAL_DIR / "eval_thresholds.yaml"
-_GOLDEN_SET_PATH = _EVAL_DIR / "golden_rag.jsonl"
-_RUNNER_PATH = _EVAL_DIR / "run_rag_eval.py"
+_EVAL_DIR = _BACKEND_ROOT / "eval" / "rag"
+_THRESHOLDS_PATH = _EVAL_DIR / "thresholds.yaml"
+_GOLDEN_SET_PATH = _EVAL_DIR / "golden_set.jsonl"
+_RUNNER_PATH = _EVAL_DIR / "run_eval.py"
 
 _REQUIRED_GOLDEN_FIELDS = {"id", "question", "ideal_answer", "ground_truth_chunks"}
 
@@ -45,7 +45,7 @@ def rag_thresholds() -> dict:
     """Load committed RAG thresholds."""
     with open(_THRESHOLDS_PATH) as f:
         data: dict = yaml.safe_load(f)
-    return data["rag"]
+    return data
 
 
 @pytest.fixture(scope="module")
@@ -84,9 +84,7 @@ class TestRagThresholds:
         """The three mandatory RAGAS + retrieval thresholds must all be defined."""
         required = {"faithfulness", "answer_relevancy", "hit_at_5"}
         missing = required - set(rag_thresholds.keys())
-        assert not missing, (
-            f"Missing RAG thresholds in eval_thresholds.yaml: {missing}"
-        )
+        assert not missing, f"Missing RAG thresholds in eval_thresholds.yaml: {missing}"
 
     def test_faithfulness_threshold_is_defensible(
         self,
@@ -113,14 +111,9 @@ class TestRagThresholds:
         golden_set: list[dict],
     ) -> None:
         """Every Q/A pair must have id, question, ideal_answer, ground_truth_chunks."""
-        bad = [
-            qa["id"]
-            for qa in golden_set
-            if not _REQUIRED_GOLDEN_FIELDS.issubset(qa.keys())
-        ]
+        bad = [qa["id"] for qa in golden_set if not _REQUIRED_GOLDEN_FIELDS.issubset(qa.keys())]
         assert not bad, (
-            f"Golden set items missing required fields: {bad}. "
-            f"Required: {_REQUIRED_GOLDEN_FIELDS}"
+            f"Golden set items missing required fields: {bad}. Required: {_REQUIRED_GOLDEN_FIELDS}"
         )
 
     def test_golden_set_ids_are_unique(
@@ -130,8 +123,7 @@ class TestRagThresholds:
         """Duplicate IDs in the golden set indicate a data preparation error."""
         ids = [qa["id"] for qa in golden_set]
         assert len(ids) == len(set(ids)), (
-            f"Duplicate IDs found in golden RAG set: "
-            f"{[x for x in ids if ids.count(x) > 1]}"
+            f"Duplicate IDs found in golden RAG set: {[x for x in ids if ids.count(x) > 1]}"
         )
 
     def test_ground_truth_chunks_are_non_empty(
@@ -139,11 +131,7 @@ class TestRagThresholds:
         golden_set: list[dict],
     ) -> None:
         """Each Q/A pair must have at least one ground-truth chunk to compute Hit@K."""
-        bad = [
-            qa["id"]
-            for qa in golden_set
-            if not qa.get("ground_truth_chunks")
-        ]
+        bad = [qa["id"] for qa in golden_set if not qa.get("ground_truth_chunks")]
         assert not bad, (
             f"Golden set items with empty ground_truth_chunks: {bad}. "
             "Hit@5 cannot be computed without ground-truth chunk references."

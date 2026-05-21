@@ -99,12 +99,14 @@ class GeminiClient:
                 if isinstance(raw_tcs, str):
                     raw_tcs = json.loads(raw_tcs)
                 for tc in raw_tcs:
-                    parts.append({
-                        "functionCall": {
-                            "name": tc["name"],
-                            "args": tc.get("arguments", {}),
+                    parts.append(
+                        {
+                            "functionCall": {
+                                "name": tc["name"],
+                                "args": tc.get("arguments", {}),
+                            }
                         }
-                    })
+                    )
                 if parts:
                     contents.append({"role": "model", "parts": parts})
 
@@ -112,18 +114,24 @@ class GeminiClient:
                 # Tool results go back as functionResponse inside a user turn.
                 raw_content = msg.get("content", "{}")
                 try:
-                    result_data: Any = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+                    result_data: Any = (
+                        json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+                    )
                 except json.JSONDecodeError:
                     result_data = {"raw": raw_content}
-                contents.append({
-                    "role": "user",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": msg.get("tool_name", "unknown"),
-                            "response": result_data,
-                        }
-                    }],
-                })
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "functionResponse": {
+                                    "name": msg.get("tool_name", "unknown"),
+                                    "response": result_data,
+                                }
+                            }
+                        ],
+                    }
+                )
             # system role is handled via system_instruction, not contents
 
         body: dict[str, Any] = {"contents": contents}

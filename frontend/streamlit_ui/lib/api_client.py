@@ -70,9 +70,9 @@ class APIClient:
     # ------------------------------------------------------------------ auth endpoints
 
     def login(self, email: str, password: str) -> dict[str, Any]:
-        """POST /auth/jwt/login — returns {access_token, token_type}."""
+        """POST /auth/login — returns {access_token, token_type}."""
         resp = httpx.post(
-            f"{self._base}/auth/jwt/login",
+            f"{self._base}/auth/login",
             data={"username": email, "password": password},
             timeout=self._timeout,
         )
@@ -92,12 +92,18 @@ class APIClient:
         message: str,
         conversation_id: str | None = None,
         widget_id: str | None = None,
+        rag_source_types: list[str] | None = None,
+        rag_min_confidence: float | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"message": message}
         if conversation_id:
             payload["conversation_id"] = conversation_id
         if widget_id:
             payload["widget_id"] = widget_id
+        if rag_source_types:
+            payload["rag_source_types"] = rag_source_types
+        if rag_min_confidence is not None:
+            payload["rag_min_confidence"] = rag_min_confidence
         return dict(self._post("/chat", payload))
 
     # ------------------------------------------------------------------ widgets (admin)
