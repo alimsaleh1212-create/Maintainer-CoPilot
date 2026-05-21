@@ -1,13 +1,19 @@
-"""Summarization endpoint: POST /summarize"""
+"""Summarization endpoint: POST /summarize
+
+Uses the injected primary LLM (Gemini) to produce concise summaries.  All
+network/credential plumbing is delegated to the LLMClient abstraction in
+``app.infra.llm`` — this route just shapes the prompt and returns a Pydantic
+response.
+"""
 
 from __future__ import annotations
 
-import os
-
-import httpx
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from app.api.dependencies import PrimaryLLMDep
+from app.domain.errors import ToolFailure
 
 logger = structlog.get_logger(__name__)
 
@@ -15,96 +21,48 @@ router = APIRouter(prefix="/summarize", tags=["summarization"])
 
 
 class SummarizeRequest(BaseModel):
+    """Request body for /summarize."""
+
     text: str = Field(..., min_length=10, max_length=4096, description="Text to summarize")
-    max_length: int = Field(default=150, ge=50, le=500, description="Max summary length")
+    max_length: int = Field(default=150, ge=50, le=500, description="Max summary length (words)")
 
 
 class SummarizeResponse(BaseModel):
+    """Response body for /summarize."""
+
     summary: str
-    model: str = "gemini-2.5-flash"
-    input_tokens: int = 0
-    output_tokens: int = 0
+    model: str
 
 
-async def summarize_with_gemini(
-    text: str,
-    max_length: int,
-    api_key: str,
-) -> dict[str, str | int]:
-    """Summarize text using Gemini API."""
-    async with httpx.AsyncClient() as client:
-        prompt = f"""Summarize the following text in {max_length} words or less.
-Be concise and preserve key information.
-
-Text:
-{text}
-
-Summary:"""
-
-        resp = await client.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-            params={"key": api_key},
-            json={
-                "contents": [
-                    {
-                        "parts": [{"text": prompt}],
-                    }
-                ],
-                "generationConfig": {"maxOutputTokens": max_length},
-            },
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-
-        data = resp.json()
-        content = data["candidates"][0]["content"]["parts"][0]["text"]
-
-        return {
-            "summary": content,
-            "input_tokens": data.get("usageMetadata", {}).get("promptTokenCount", 0),
-            "output_tokens": data.get("usageMetadata", {}).get("candidatesTokenCount", 0),
-        }
+_SUMMARIZE_PROMPT = (
+    "Summarize the following text in {max_length} words or less. "
+    "Be concise and preserve the key information.\n\n"
+    "Text:\n{text}\n\nSummary:"
+)
 
 
 @router.post("", response_model=SummarizeResponse)
-async def summarize(req: SummarizeRequest) -> SummarizeResponse:
-    """Summarize text using LLM.
-
-    Currently uses Gemini 2.5 Flash via API. Credentials from environment.
+async def summarize(req: SummarizeRequest, llm: PrimaryLLMDep) -> SummarizeResponse:
+    """Summarize text using the primary LLM.
 
     Args:
-        req: SummarizeRequest with text and max_length
+        req: SummarizeRequest with text and max_length.
+        llm: Injected primary LLM client (Gemini).
 
     Returns:
-        SummarizeResponse with summary, model, token counts
+        SummarizeResponse with summary and model name.
+
+    Raises:
+        ToolFailure: If the LLM call fails (mapped to 503 by the boundary handler).
     """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.error("summarize.missing_api_key")
-        raise HTTPException(
-            status_code=503,
-            detail="Summarization service misconfigured",
-        )
-
+    prompt = _SUMMARIZE_PROMPT.format(max_length=req.max_length, text=req.text)
     try:
-        result = await summarize_with_gemini(req.text, req.max_length, api_key)
-
-        logger.info(
-            "summarize.success",
-            input_tokens=result["input_tokens"],
-            output_tokens=result["output_tokens"],
-        )
-
-        return SummarizeResponse(
-            summary=result["summary"],
-            input_tokens=result["input_tokens"],
-            output_tokens=result["output_tokens"],
-        )
-
-    except httpx.TimeoutException as e:
-        logger.error("summarize.timeout", error=str(e))
-        raise HTTPException(status_code=504, detail="Summarization timeout") from e
-
+        summary = await llm.chat(messages=[{"role": "user", "content": prompt}])
     except Exception as e:
-        logger.exception("summarize.failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Summarization failed") from e
+        logger.exception("summarize.llm_failed", error=str(e))
+        raise ToolFailure(f"Summarize LLM call failed: {e}") from e
+
+    # Both GeminiClient and OllamaClient expose the model name as ``_model``.
+    model_name = getattr(llm, "_model", "unknown")
+    logger.info("summarize.success", input_length=len(req.text), output_length=len(summary))
+    return SummarizeResponse(summary=summary.strip(), model=model_name)

@@ -115,41 +115,16 @@ services:
     image: hashicorp/vault:latest
     cap_add:
       - IPC_LOCK
-    entrypoint: /bin/sh
-    # env_file loads every line from .env directly into the container's
-    # environment. Path is relative to this compose file (docker/../.env).
-    # This makes vault-init work regardless of which directory the user
-    # runs `docker compose` from.
-    env_file:
-      - ../.env
-    command:
-      - -c
-      - |
-        echo "Waiting for Vault to be healthy..."
-        while ! vault status -address=http://vault:8200 >/dev/null 2>&1; do
-          sleep 1
-        done
-        echo "Vault is ready. Seeding secrets..."
-        # $$ below = literal $ in the container shell (not docker-compose expansion).
-        # All values come from env_file (.env), so no variable is hardcoded here.
-        vault kv put -address=http://vault:8200 secret/copilot \
-          gemini_api_key="$$GEMINI_API_KEY" \
-          ollama_host="http://ollama:11434" \
-          jwt_signing_key="$${JWT_SIGNING_KEY:-dev-jwt-signing-key-change-in-production}" \
-          database_url="postgresql+asyncpg://copilot:copilot@db:5432/copilot" \
-          minio_access_key="$${MINIO_ACCESS_KEY:-minioadmin}" \
-          minio_secret_key="$${MINIO_SECRET_KEY:-minioadmin}" \
-          langfuse_public_key="$${LANGFUSE_PUBLIC_KEY:-dev-langfuse-public-key}" \
-          langfuse_secret_key="$${LANGFUSE_SECRET_KEY:-dev-langfuse-secret-key}" \
-          gemini_model="$${GEMINI_MODEL:-gemini-2.0-flash}" \
-          ollama_chat_model="$${OLLAMA_CHAT_MODEL:-gemma3:4b}" \
-          ollama_embed_model="$${OLLAMA_EMBED_MODEL:-nomic-embed-text}"
-        echo "✓ Secrets seeded successfully"
+    # Mount the project-root .env (read-only) and the seeding script into
+    # the container. The script reads .env directly, so this is independent
+    # of which directory `docker compose` is invoked from.
+    volumes:
+      - ../.env:/secrets/.env:ro
+      - ./vault-init.sh:/usr/local/bin/vault-init.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/vault-init.sh"]
     environment:
-      # VAULT_ADDR and VAULT_TOKEN are set explicitly so they override any
-      # value that might come from env_file, keeping vault-init isolated.
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: "${VAULT_ROOT_TOKEN}"
+      VAULT_TOKEN: "${VAULT_ROOT_TOKEN:-dev-token-local}"
     depends_on:
       vault:
         condition: service_healthy
