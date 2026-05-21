@@ -82,35 +82,41 @@ class MarkdownChunker:
                     current_size = len(current_chunk)
 
                     for para in paragraphs:
-                        para_size = len(para)
+                        # If a single paragraph is oversized, split it by words first
+                        sub_paras = [para]
+                        if len(para) > self.max_chunk_size:
+                            sub_paras = self._split_large_paragraph(para)
 
-                        # If adding para exceeds max_chunk_size, flush current
-                        if (
-                            current_size + para_size > self.max_chunk_size
-                            and current_chunk.strip()
-                        ):
-                            chunk_text = current_chunk.strip()
-                            if len(chunk_text) >= self.min_chunk_size:
-                                chunks.append(
-                                    Chunk(
-                                        text=chunk_text,
-                                        metadata=metadata.copy(),
-                                        source=source,
-                                        chunk_id=f"{source}#{chunk_id_counter}",
+                        for sub_para in sub_paras:
+                            para_size = len(sub_para)
+
+                            # If adding para exceeds max_chunk_size, flush current
+                            if (
+                                current_size + para_size > self.max_chunk_size
+                                and current_chunk.strip()
+                            ):
+                                chunk_text = current_chunk.strip()
+                                if len(chunk_text) >= self.min_chunk_size:
+                                    chunks.append(
+                                        Chunk(
+                                            text=chunk_text,
+                                            metadata=metadata.copy(),
+                                            source=source,
+                                            chunk_id=f"{source}#{chunk_id_counter}",
+                                        )
                                     )
-                                )
-                                chunk_id_counter += 1
+                                    chunk_id_counter += 1
 
-                            # Start new chunk with overlap
-                            if header_context:
-                                current_chunk = header_context + "\n\n"
-                                current_size = len(current_chunk)
-                            else:
-                                current_chunk = ""
-                                current_size = 0
+                                # Start new chunk with overlap
+                                if header_context:
+                                    current_chunk = header_context + "\n\n"
+                                    current_size = len(current_chunk)
+                                else:
+                                    current_chunk = ""
+                                    current_size = 0
 
-                        current_chunk += para + "\n\n"
-                        current_size += para_size + 2
+                            current_chunk += sub_para + "\n\n"
+                            current_size += para_size + 2
 
                     # Flush remaining chunk
                     if current_chunk.strip() and len(current_chunk.strip()) >= self.min_chunk_size:
@@ -151,6 +157,24 @@ class MarkdownChunker:
     def _split_paragraphs(self, text: str) -> list[str]:
         """Split text by paragraph (blank lines)."""
         return [p.strip() for p in text.split("\n\n") if p.strip()]
+
+    def _split_large_paragraph(self, text: str) -> list[str]:
+        """Split an oversized paragraph by words into max_chunk_size pieces."""
+        parts: list[str] = []
+        words = text.split()
+        current: list[str] = []
+        current_size = 0
+        for word in words:
+            word_size = len(word) + 1
+            if current_size + word_size > self.max_chunk_size and current:
+                parts.append(" ".join(current))
+                current = []
+                current_size = 0
+            current.append(word)
+            current_size += word_size
+        if current:
+            parts.append(" ".join(current))
+        return parts
 
     def _fallback_split(
         self,

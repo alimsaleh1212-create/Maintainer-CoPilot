@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.rag_chunk import RagChunkCreate
-from app.models import RagChunk
 from app.rag.chunking import MarkdownChunker
 from app.rag.embeddings import EmbeddingModel
 
@@ -75,7 +72,7 @@ class CorpusIngestor:
                         await self._insert_chunk(
                             db_session=db_session,
                             chunk_id=chunk_id,
-                            text=chunk.text,
+                            content=chunk.text,
                             source="docs",
                             embedding=embedding,
                             tsvector_text=tsvector_text,
@@ -166,7 +163,7 @@ class CorpusIngestor:
                         await self._insert_chunk(
                             db_session=db_session,
                             chunk_id=chunk_id,
-                            text=chunk.text,
+                            content=chunk.text,
                             source="issue",
                             embedding=embedding,
                             tsvector_text=tsvector_text,
@@ -206,12 +203,12 @@ class CorpusIngestor:
             Stats: {total_chunks, indexed_chunks, unindexed_chunks}
         """
         # Count total chunks
-        total_result = await db_session.execute(select(text("COUNT(*)")))
+        total_result = await db_session.execute(text("SELECT COUNT(*) FROM rag_chunks"))
         total = total_result.scalar() or 0
 
         # Count chunks with embeddings
         indexed_result = await db_session.execute(
-            select(text("COUNT(*) FROM rag_chunks WHERE embedding IS NOT NULL"))
+            text("SELECT COUNT(*) FROM rag_chunks WHERE embedding IS NOT NULL")
         )
         indexed = indexed_result.scalar() or 0
 
@@ -228,7 +225,7 @@ class CorpusIngestor:
         self,
         db_session: AsyncSession,
         chunk_id: str,
-        text: str,
+        content: str,
         source: str,
         embedding: list[float],
         tsvector_text: str,
@@ -239,24 +236,29 @@ class CorpusIngestor:
         Args:
             db_session: SQLAlchemy async session
             chunk_id: Unique chunk identifier
-            text: Chunk text content
+            content: Chunk text content
             source: "docs" or "issue"
             embedding: Vector embedding
             tsvector_text: Text for tsvector indexing
             metadata: Additional metadata
         """
-        # Create tsvector using Postgres function
+        import json as _json
+
+        # pgvector expects "[f1, f2, ...]" format; use CAST() not :: so SQLAlchemy
+        # can parse the named parameters correctly.
+        embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
         stmt = text(
             "INSERT INTO rag_chunks (chunk_id, text, source, embedding, tsvector, metadata) "
-            "VALUES (:chunk_id, :text, :source, :embedding, to_tsvector('english', :tsvector_text), :metadata) "
+            "VALUES (:chunk_id, :content, :source, CAST(:embedding AS vector), "
+            "to_tsvector('english', :tsvector_text), CAST(:metadata AS jsonb)) "
             "ON CONFLICT (chunk_id) DO NOTHING"
         ).bindparams(
             chunk_id=chunk_id,
-            text=text,
+            content=content,
             source=source,
-            embedding=str(embedding),  # pgvector expects string format
+            embedding=embedding_str,
             tsvector_text=tsvector_text,
-            metadata=metadata,
+            metadata=_json.dumps(metadata),
         )
 
         await db_session.execute(stmt)

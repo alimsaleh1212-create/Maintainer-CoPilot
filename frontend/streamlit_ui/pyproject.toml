@@ -5,8 +5,11 @@ description = "Streamlit internal UI for the Maintainer's Copilot (auth, admin, 
 requires-python = ">=3.12,<3.13"
 readme = "../../README.md"
 dependencies = [
+    "httpx>=0.28.1",
     # Runtime deps land as features are built (uv add ...).
     # streamlit / httpx / pydantic will be added on Day THU when the UI takes shape.
+    "pydantic>=2.13.4",
+    "streamlit>=1.57.0",
 ]
 
 [dependency-groups]

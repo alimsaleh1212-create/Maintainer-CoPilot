@@ -1,0 +1,27 @@
+# Keep backend build context lean.
+
+# Python virtual env (NEVER copy into image — installs via uv in the build stage)
+.venv/
+venv/
+
+# Cache dirs
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.uv-cache/
+
+# Test / lint / type-check artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets
+.env
+.env.*
+
+# Dev data
+tests/
+ml/

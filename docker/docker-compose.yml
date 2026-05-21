@@ -23,7 +23,7 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     environment:
-      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_EMAIL:-admin@dev.local}"
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_EMAIL:-admin@example.com}"
       PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_PASSWORD:-admin}"
       PGADMIN_CONFIG_SERVER_MODE: "False"
     depends_on:
@@ -91,7 +91,7 @@ services:
       OLLAMA_HOST: 0.0.0.0:11434
       OLLAMA_KEEP_ALIVE: -1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -173,7 +173,7 @@ services:
       context: ../backend
       dockerfile: ../docker/api.Dockerfile
       target: runtime
-    command: ["uv", "run", "alembic", "upgrade", "head"]
+    command: ["python", "-m", "alembic", "upgrade", "head"]
     environment:
       VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
       VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
@@ -194,7 +194,7 @@ services:
       context: ../backend
       dockerfile: ../docker/api.Dockerfile
       target: runtime
-    command: ["uv", "run", "uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
       VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
@@ -217,6 +217,8 @@ services:
       start_period: 15s
     ports:
       - "${API_PORT:-8000}:8000"
+    volumes:
+      - widget_dist:/app/static/widget:ro
     networks:
       - backend
 
@@ -224,10 +226,18 @@ services:
     build:
       context: ../backend
       dockerfile: ../docker/model_server.Dockerfile
-    command: ["uv", "run", "uvicorn", "model_server.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    command: ["uvicorn", "model_server.main:app", "--host", "0.0.0.0", "--port", "8001"]
     environment:
       VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
       VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
+      # Weights are pulled from MinIO on container start (no bind mount needed).
+      # CLASSIFIER_MODEL_DIR: local cache dir where weights land after pull
+      CLASSIFIER_MODEL_DIR: "/tmp/classifier/best"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin"
+      MINIO_BUCKET: "copilot"
+      MINIO_MODEL_PREFIX: "models/classifier/best"
     depends_on:
       vault-init:
         condition: service_completed_successfully
@@ -251,7 +261,7 @@ services:
     build:
       context: ../frontend/streamlit_ui
       dockerfile: ../../docker/streamlit.Dockerfile
-    command: ["uv", "run", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    command: ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     environment:
       API_BASE_URL: "http://api:8000"
     depends_on:
@@ -282,6 +292,8 @@ services:
       retries: 5
     ports:
       - "${WIDGET_PORT:-8081}:80"
+    volumes:
+      - widget_dist:/usr/share/nginx/html
     networks:
       - backend
 
@@ -322,3 +334,4 @@ volumes:
   minio_data:
   ollama_data:
   pgadmin_data:
+  widget_dist:

@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, String, Text, func, text
+from sqlalchemy import DateTime, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,12 +23,12 @@ class RagChunk(Base):
     text: Mapped[str] = mapped_column(Text(), nullable=False)
     source: Mapped[str] = mapped_column(String(64), nullable=False)  # "docs" | "issue"
     embedding: Mapped[list[float]] = mapped_column(
-        Vector(384), nullable=False
-    )  # BAAI/bge-small: 384-dim
+        Vector(768), nullable=False
+    )  # nomic-embed-text via Ollama: 768-dim
     tsvector: Mapped[object] = mapped_column(
         TSVECTOR(), nullable=False
     )  # For BM25 sparse search
-    metadata: Mapped[dict[str, str]] = mapped_column(JSONB(), default={}, nullable=False)
+    chunk_metadata: Mapped[dict[str, str]] = mapped_column("metadata", JSONB(), default={}, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

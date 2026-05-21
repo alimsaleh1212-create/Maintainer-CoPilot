@@ -1,11 +1,7 @@
-"""SQLAlchemy ORM base class."""
+"""SQLAlchemy ORM base — re-exports from app.repositories.base to share one MetaData."""
 
 from __future__ import annotations
 
-from sqlalchemy.orm import DeclarativeBase
+from app.repositories.base import Base
 
-
-class Base(DeclarativeBase):
-    """Base class for all ORM models."""
-
-    pass
+__all__ = ["Base"]

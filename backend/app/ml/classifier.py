@@ -118,11 +118,6 @@ def load_classifier(model_dir: Path) -> DistilBertClassifier:
         ClassifierLoadError: if weights are missing, model card is absent,
             or the SHA-256 hash does not match.
     """
-    from transformers import (
-        AutoModelForSequenceClassification,
-        AutoTokenizer,
-    )
-
     if not model_dir.exists():
         raise ClassifierLoadError(f"Classifier model directory not found: {model_dir}")
 
@@ -154,6 +149,9 @@ def load_classifier(model_dir: Path) -> DistilBertClassifier:
         raise ClassifierLoadError(
             f"SHA-256 mismatch for {model_dir}: expected {expected_hash}, got {actual_hash}"
         )
+
+    # Deferred import — only required in model-server (not in API image).
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
     model = AutoModelForSequenceClassification.from_pretrained(str(model_dir))
