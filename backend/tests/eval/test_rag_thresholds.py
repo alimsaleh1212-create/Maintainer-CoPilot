@@ -29,10 +29,10 @@ import yaml
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _BACKEND_ROOT = Path(__file__).parent.parent.parent
-_EVAL_DIR = _BACKEND_ROOT / "eval"
-_THRESHOLDS_PATH = _EVAL_DIR / "eval_thresholds.yaml"
-_GOLDEN_SET_PATH = _EVAL_DIR / "golden_rag.jsonl"
-_RUNNER_PATH = _EVAL_DIR / "run_rag_eval.py"
+_EVAL_DIR = _BACKEND_ROOT / "eval" / "rag"
+_THRESHOLDS_PATH = _EVAL_DIR / "thresholds.yaml"
+_GOLDEN_SET_PATH = _EVAL_DIR / "golden_set.jsonl"
+_RUNNER_PATH = _EVAL_DIR / "run_eval.py"
 
 _REQUIRED_GOLDEN_FIELDS = {"id", "question", "ideal_answer", "ground_truth_chunks"}
 
@@ -45,7 +45,7 @@ def rag_thresholds() -> dict:
     """Load committed RAG thresholds."""
     with open(_THRESHOLDS_PATH) as f:
         data: dict = yaml.safe_load(f)
-    return data["rag"]
+    return data
 
 
 @pytest.fixture(scope="module")
