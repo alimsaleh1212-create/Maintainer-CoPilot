@@ -61,11 +61,15 @@ def current_user() -> dict[str, object] | None:
 
 
 def is_admin() -> bool:
-    """Return True if the current user has superuser (admin) role."""
+    """Return True if the current user has the admin role.
+
+    The canonical source is the ``role`` field on /auth/me; ``is_superuser`` is
+    a legacy boolean kept for fastapi-users compatibility.
+    """
     user = current_user()
     if not user:
         return False
-    return bool(user.get("is_superuser", False))
+    return user.get("role") == "admin" or bool(user.get("is_superuser", False))
 
 
 def require_auth() -> bool:

@@ -198,31 +198,36 @@ def inject_styles() -> None:
 
 
 def page_header(title: str, subtitle: str = "", icon_svg: str = "") -> None:
-    """Render a consistent page header with optional icon and subtitle."""
-    icon_html = f"""
-    <div style="
-        width:42px;height:42px;border-radius:12px;
-        background:linear-gradient(135deg,#22c55e,#16a34a);
-        display:flex;align-items:center;justify-content:center;
-        flex-shrink:0;
-    ">{icon_svg}</div>
-    """ if icon_svg else ""
+    """Render a consistent page header with optional icon and subtitle.
 
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:1.5rem;">
-            {icon_html}
-            <div>
-                <h1 style="
-                    margin:0;font-size:1.5rem;font-weight:700;
-                    color:#f1f5f9;letter-spacing:-0.02em;line-height:1.2;
-                ">{title}</h1>
-                {"<p style='margin:4px 0 0;font-size:0.875rem;color:#64748b;'>" + subtitle + "</p>" if subtitle else ""}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    Important: the rendered HTML is emitted as a single un-indented string —
+    Streamlit's markdown parser treats any line indented 4+ spaces as a code
+    block, even with ``unsafe_allow_html=True``. Keep this on one line.
+    """
+    icon_html = (
+        '<div style="width:42px;height:42px;border-radius:12px;'
+        "background:linear-gradient(135deg,#22c55e,#16a34a);"
+        "display:flex;align-items:center;justify-content:center;"
+        f'flex-shrink:0;">{icon_svg}</div>'
+        if icon_svg
+        else ""
     )
+    subtitle_html = (
+        f"<p style=\"margin:4px 0 0;font-size:0.875rem;color:#64748b;\">{subtitle}</p>"
+        if subtitle
+        else ""
+    )
+    html = (
+        '<div style="display:flex;align-items:center;gap:14px;margin-bottom:1.5rem;">'
+        f"{icon_html}"
+        "<div>"
+        '<h1 style="margin:0;font-size:1.5rem;font-weight:700;'
+        'color:#f1f5f9;letter-spacing:-0.02em;line-height:1.2;">'
+        f"{title}</h1>"
+        f"{subtitle_html}"
+        "</div></div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def card(content_html: str, padding: str = "1.25rem") -> None:

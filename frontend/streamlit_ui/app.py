@@ -77,7 +77,7 @@ with st.sidebar:
                         {user.get("email","unknown")}
                     </div>
                     <div style="font-size:0.7rem;color:#64748b;">
-                        {"Admin" if user.get("is_superuser") else "User"}
+                        {"Admin" if (user.get("role") == "admin" or user.get("is_superuser")) else "User"}
                     </div>
                 </div>
             </div>
