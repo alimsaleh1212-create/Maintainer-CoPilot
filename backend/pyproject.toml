@@ -49,6 +49,14 @@ model-server = [
     "torch>=2.12.0",
     "transformers>=5.8.1",
 ]
+eval = [
+    # RAGAS for RAG faithfulness + answer relevancy evaluation.
+    # Uses langchain-openai to drive the Gemini LLM via its OpenAI-compatible endpoint.
+    "ragas>=0.2.6",
+    "langchain-openai>=0.3.0",
+    "datasets>=3.4.0",
+    "pandas>=2.0.0",
+]
 
 # Use CPU-only PyTorch wheel to avoid downloading 2GB+ of CUDA packages.
 # Model-server (DistilBERT classifier) runs fine on CPU for this workload.

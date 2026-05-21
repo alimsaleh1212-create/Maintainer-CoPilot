@@ -1,11 +1,17 @@
-"""Classification endpoint: POST /classify"""
+"""Classification endpoint: POST /classify
+
+Routes issue text through the cascading ClassificationService.
+DL (DistilBERT) is always tried first; the LLM fallback fires automatically
+when confidence < Settings.classify_cascade_threshold.
+"""
 
 from __future__ import annotations
 
-import httpx
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from app.api.dependencies import ClassificationServiceDep
 
 logger = structlog.get_logger(__name__)
 
@@ -20,45 +26,43 @@ class ClassifyRequest(BaseModel):
 class ClassifyResponse(BaseModel):
     label: str = Field(..., description="Predicted label: bug, feature, or support")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Prediction confidence")
-    model_version: str = Field(..., description="Model version from model_card.json")
-    latency_ms: float = Field(..., ge=0.0, description="Inference latency in milliseconds")
-
-
-async def get_model_server_client() -> httpx.AsyncClient:
-    """Return async HTTP client for model-server."""
-    return httpx.AsyncClient(base_url="http://model-server:8001", timeout=10.0)
+    model_version: str = Field(
+        ..., description="Model identifier (includes 'cascade:' prefix when LLM was used)"
+    )
+    latency_ms: float = Field(..., ge=0.0, description="Total inference latency in milliseconds")
+    cascade_triggered: bool = Field(
+        default=False,
+        description="True when DistilBERT confidence was below threshold and the LLM was used",
+    )
+    cascade_model: str | None = Field(
+        default=None,
+        description="LLM used for cascade (e.g. 'gemini-2.0-flash'), or null if not triggered",
+    )
 
 
 @router.post("", response_model=ClassifyResponse)
 async def classify(
     req: ClassifyRequest,
-    client: httpx.AsyncClient = Depends(get_model_server_client),
+    classification_service: ClassificationServiceDep,
 ) -> ClassifyResponse:
-    """Classify an issue by calling the model-server.
+    """Classify an issue via the cascading classification pipeline.
+
+    Calls DistilBERT (model-server) first.  If confidence is below
+    ``classify_cascade_threshold`` in Settings, the LLM is used automatically.
 
     Args:
-        req: ClassifyRequest with issue text
-        client: HTTP client to model-server
+        req: ClassifyRequest with issue text and optional tokenizer max_length.
+        classification_service: Injected ClassificationService (cascade-enabled).
 
     Returns:
-        ClassifyResponse with label, confidence, model_version, latency_ms
+        ClassifyResponse including ``cascade_triggered`` and ``cascade_model``.
     """
-    try:
-        resp = await client.post(
-            "/predict",
-            json={"text": req.text, "max_length": req.max_length},
-        )
-        resp.raise_for_status()
-        return ClassifyResponse(**resp.json())
-
-    except httpx.TimeoutException as e:
-        logger.error("classify.model_server_timeout", error=str(e))
-        raise HTTPException(status_code=503, detail="Model server timeout") from e
-
-    except httpx.ConnectError as e:
-        logger.error("classify.model_server_unreachable", error=str(e))
-        raise HTTPException(status_code=503, detail="Model server unreachable") from e
-
-    except Exception as e:
-        logger.exception("classify.failed", error=str(e))
-        raise HTTPException(status_code=500, detail="Classification failed") from e
+    result = await classification_service.classify(req.text, req.max_length)
+    return ClassifyResponse(
+        label=result.label,
+        confidence=result.confidence,
+        model_version=result.model_version,
+        latency_ms=result.latency_ms,
+        cascade_triggered=result.cascade_triggered,
+        cascade_model=result.cascade_model,
+    )

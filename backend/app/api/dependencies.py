@@ -59,23 +59,29 @@ async def get_redis(request: Request) -> Redis:  # type: ignore[type-arg]
 
 
 def get_classification_service(request: Request) -> ClassificationService:
-    """Return a ClassificationService backed by the model-server HTTP client.
+    """Return a ClassificationService with cascade LLM fallback wired in.
 
-    The client is built fresh per request (lightweight — no connection pool
-    state is held).  The model-server URL comes from Settings.
+    The model-server HTTP client is built fresh per request (lightweight —
+    no connection pool state).  The Gemini client singleton and cascade
+    threshold are taken from app.state / Settings.
 
     Args:
-        request: FastAPI request (used to access app.state.settings).
+        request: FastAPI request (used to access app.state singletons).
 
     Returns:
-        ClassificationService instance.
+        ClassificationService instance with cascade enabled.
     """
     settings: Settings = request.app.state.settings
     client = httpx.AsyncClient(
         base_url=settings.model_server_base_url,
         timeout=10.0,
     )
-    return ClassificationService(client=client)
+    return ClassificationService(
+        client=client,
+        llm_client=request.app.state.gemini_client,
+        cascade_threshold=settings.classify_cascade_threshold,
+        llm_model_name=settings.gemini_model,
+    )
 
 
 def get_memory_service(request: Request) -> MemoryService:
