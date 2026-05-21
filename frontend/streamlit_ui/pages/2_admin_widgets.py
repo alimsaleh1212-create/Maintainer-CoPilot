@@ -46,7 +46,8 @@ if not widgets:
     )
 else:
     for w in widgets:
-        wid = str(w.get("id", ""))
+        internal_id = str(w.get("id", ""))
+        public_wid = str(w.get("public_widget_id", ""))
         enabled = bool(w.get("enabled", True))
         origins = w.get("allowed_origins", [])
         tools = w.get("enabled_tools", [])
@@ -54,7 +55,7 @@ else:
         status_color = "#22c55e" if enabled else "#ef4444"
         status_label = "Enabled" if enabled else "Disabled"
 
-        with st.expander(f"Widget  ·  {wid[:16]}…  ·  {status_label}", expanded=False):
+        with st.expander(f"Widget  ·  {public_wid}  ·  {status_label}", expanded=False):
             col_a, col_b = st.columns([3, 1])
             with col_a:
                 st.markdown(
@@ -68,7 +69,7 @@ else:
                 st.markdown("**Embed snippet:**")
                 st.code(
                     f'<script src="http://localhost:8000/widget.js"\n'
-                    f'        data-widget-id="{wid}"\n'
+                    f'        data-widget-id="{public_wid}"\n'
                     f'        data-api-host="http://localhost:8000" async></script>',
                     language="html",
                 )
@@ -77,9 +78,9 @@ else:
                 if tools:
                     st.markdown(f"**Enabled tools:** `{'` · `'.join(tools)}`")
             with col_b:
-                if st.button("Delete widget", key=f"del_{wid}", type="secondary"):
+                if st.button("Delete widget", key=f"del_{internal_id}", type="secondary"):
                     try:
-                        client.delete_widget(wid)
+                        client.delete_widget(internal_id)
                         st.success("Deleted")
                         st.rerun()
                     except Exception as exc:  # noqa: BLE001

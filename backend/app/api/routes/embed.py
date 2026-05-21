@@ -59,11 +59,11 @@ def _widget_html_shell(public_widget_id: str, api_origin: str = "") -> str:
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{ height: 100vh; overflow: hidden; font-family: system-ui, sans-serif; }}
-    #widget-root {{ height: 100%; }}
+    #root {{ height: 100%; }}
   </style>
 </head>
 <body>
-  <div id="widget-root"></div>
+  <div id="root"></div>
   <script>
     window.__WIDGET_CONFIG__ = {{
       widgetId: {public_widget_id!r},
@@ -78,6 +78,7 @@ def _widget_html_shell(public_widget_id: str, api_origin: str = "") -> str:
 @router.get("/embed", response_class=HTMLResponse)
 async def embed(
     widget_id: str = Query(..., description="Public widget ID (wgt_* format)"),
+    api_host: str = Query(default="", description="Backend API base URL forwarded by the loader"),
     widget_service: WidgetService = Depends(get_widget_service),
 ) -> HTMLResponse:
     """Serve the widget HTML shell with appropriate CSP headers.
@@ -88,6 +89,7 @@ async def embed(
 
     Args:
         widget_id: Public widget identifier (``wgt_*`` format).
+        api_host: API base URL forwarded by the loader script (``data-api-host``).
         widget_service: Widget CRUD service (injected by FastAPI).
 
     Returns:
@@ -120,7 +122,10 @@ async def embed(
     if cors_origin:
         headers["Access-Control-Allow-Origin"] = cors_origin
 
-    html = _widget_html_shell(public_widget_id=widget.public_widget_id)
+    html = _widget_html_shell(
+        public_widget_id=widget.public_widget_id,
+        api_origin=api_host,
+    )
 
     logger.info(
         "embed.served",

@@ -67,6 +67,8 @@ class WidgetService:
             theme = {}
         if enabled_tools is None:
             enabled_tools = ["classify", "ner", "summarize", "rag_search"]
+        # Normalise origins: strip trailing slashes so CSP frame-ancestors matches correctly.
+        allowed_origins = [o.rstrip("/") for o in allowed_origins]
 
         async with self._session_factory() as session:
             widget = Widget(
