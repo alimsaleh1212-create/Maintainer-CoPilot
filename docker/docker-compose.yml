@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: copilot
       POSTGRES_USER: copilot
-      POSTGRES_PASSWORD: copilot  # dev-only; prod reads from Vault
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-copilot}"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +23,7 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     environment:
-      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_EMAIL:-admin@example.com}"
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_EMAIL:-admin@dev.local}"
       PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_PASSWORD:-admin}"
       PGADMIN_CONFIG_SERVER_MODE: "False"
     depends_on:
@@ -53,8 +53,8 @@ services:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin     # dev-only; prod reads from Vault
-      MINIO_ROOT_PASSWORD: minioadmin # dev-only; prod reads from Vault
+      MINIO_ROOT_USER: "${MINIO_ACCESS_KEY:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_SECRET_KEY:-minioadmin}"
     volumes:
       - minio_data:/data
     healthcheck:
