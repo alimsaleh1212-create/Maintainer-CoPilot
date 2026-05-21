@@ -5,24 +5,23 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
-# Install system deps needed by psycopg2-binary, spaCy, etc.
+# System deps required by psycopg2-binary, spaCy, etc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ---- dependency layer (cached unless lockfile changes) ----
+# ---- dependency layer (rebuild only when lockfile changes) ----
 FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev
+# uv sync creates /app/.venv with all packages; the runtime stage extends deps
+# so the venv is already present — no cross-stage copy needed.
+RUN uv sync --frozen --no-dev --no-cache
 
-# ---- runtime image ----
-FROM base AS runtime
-COPY --from=deps /app/.venv /app/.venv
+# ---- runtime image (extends deps — .venv already in this layer) ----
+FROM deps AS runtime
 COPY . .
-
-ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv
-
+# Add venv to PATH so python/uvicorn/alembic scripts are found without uv run.
+ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000

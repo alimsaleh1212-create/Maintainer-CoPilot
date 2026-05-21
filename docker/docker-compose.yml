@@ -1,6 +1,6 @@
 services:
   # ---------------------------------------------------------------------------
-  # Infrastructure
+  # Infrastructure — data layer (internal network only)
   # ---------------------------------------------------------------------------
   db:
     image: pgvector/pgvector:pg16
@@ -17,6 +17,24 @@ services:
       retries: 10
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - backend
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_EMAIL:-admin@example.com}"
+      PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_PASSWORD:-admin}"
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    networks:
+      - backend
 
   redis:
     image: redis:7-alpine
@@ -28,6 +46,8 @@ services:
       retries: 10
     ports:
       - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - backend
 
   minio:
     image: minio/minio:latest
@@ -45,6 +65,8 @@ services:
     ports:
       - "${MINIO_API_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    networks:
+      - backend
 
   vault:
     image: hashicorp/vault:latest
@@ -60,6 +82,67 @@ services:
       retries: 10
     ports:
       - "${VAULT_PORT:-8200}:8200"
+    networks:
+      - backend
+
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_KEEP_ALIVE: -1
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+  # vault-init — seeds secrets once per fresh Vault start, then exits.
+  #
+  # Vault dev mode is in-memory: secrets are lost when the vault container
+  # restarts. vault-init re-seeds on every fresh start, so the pattern is:
+  #   docker compose restart vault  →  vault-init must also restart.
+  # For persistent secrets across restarts see docs/RUNBOOK.md (file backend).
+  # ---------------------------------------------------------------------------
+  vault-init:
+    image: hashicorp/vault:latest
+    cap_add:
+      - IPC_LOCK
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Waiting for Vault to be healthy..."
+        while ! vault status -address=http://vault:8200 >/dev/null 2>&1; do
+          sleep 1
+        done
+        echo "Vault is ready. Seeding secrets..."
+        vault kv put -address=http://vault:8200 secret/copilot \
+          gemini_api_key="dev-gemini-key-placeholder" \
+          ollama_host="http://ollama:11434" \
+          jwt_signing_key="dev-jwt-signing-key-change-in-production-$(date +%s)" \
+          database_url="postgresql+asyncpg://copilot:copilot@db:5432/copilot" \
+          minio_access_key="minioadmin" \
+          minio_secret_key="minioadmin" \
+          langfuse_public_key="dev-langfuse-public-key" \
+          langfuse_secret_key="dev-langfuse-secret-key"
+        echo "✓ Secrets seeded successfully"
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: "${VAULT_ROOT_TOKEN}"
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - backend
 
   langfuse:
     image: langfuse/langfuse:latest
@@ -79,6 +162,8 @@ services:
       start_period: 30s
     ports:
       - "${LANGFUSE_PORT:-3000}:3000"
+    networks:
+      - backend
 
   # ---------------------------------------------------------------------------
   # Migration (runs once, exits before api boots)
@@ -88,16 +173,18 @@ services:
       context: ../backend
       dockerfile: ../docker/api.Dockerfile
       target: runtime
-    command: ["uv", "run", "alembic", "upgrade", "head"]
+    command: ["python", "-m", "alembic", "upgrade", "head"]
     environment:
       VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
       VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
     depends_on:
       db:
         condition: service_healthy
-      vault:
-        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
     restart: "no"
+    networks:
+      - backend
 
   # ---------------------------------------------------------------------------
   # Backend services
@@ -107,13 +194,15 @@ services:
       context: ../backend
       dockerfile: ../docker/api.Dockerfile
       target: runtime
-    command: ["uv", "run", "uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
       VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
     depends_on:
       migrate:
         condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -128,18 +217,30 @@ services:
       start_period: 15s
     ports:
       - "${API_PORT:-8000}:8000"
+    volumes:
+      - widget_dist:/app/static/widget:ro
+    networks:
+      - backend
 
   model-server:
     build:
       context: ../backend
       dockerfile: ../docker/model_server.Dockerfile
-    command: ["uv", "run", "uvicorn", "model_server.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    command: ["uvicorn", "model_server.main:app", "--host", "0.0.0.0", "--port", "8001"]
     environment:
       VAULT_ADDR: "${VAULT_ADDR:-http://vault:8200}"
       VAULT_ROOT_TOKEN: "${VAULT_ROOT_TOKEN}"
+      # Weights are pulled from MinIO on container start (no bind mount needed).
+      # CLASSIFIER_MODEL_DIR: local cache dir where weights land after pull
+      CLASSIFIER_MODEL_DIR: "/tmp/classifier/best"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minioadmin"
+      MINIO_SECRET_KEY: "minioadmin"
+      MINIO_BUCKET: "copilot"
+      MINIO_MODEL_PREFIX: "models/classifier/best"
     depends_on:
-      vault:
-        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     healthcheck:
@@ -150,6 +251,8 @@ services:
       start_period: 30s
     ports:
       - "${MODEL_SERVER_PORT:-8001}:8001"
+    networks:
+      - backend
 
   # ---------------------------------------------------------------------------
   # Frontend services
@@ -158,7 +261,7 @@ services:
     build:
       context: ../frontend/streamlit_ui
       dockerfile: ../../docker/streamlit.Dockerfile
-    command: ["uv", "run", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    command: ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
     environment:
       API_BASE_URL: "http://api:8000"
     depends_on:
@@ -172,6 +275,8 @@ services:
       start_period: 20s
     ports:
       - "${STREAMLIT_PORT:-8501}:8501"
+    networks:
+      - backend
 
   widget:
     build:
@@ -187,6 +292,10 @@ services:
       retries: 5
     ports:
       - "${WIDGET_PORT:-8081}:80"
+    volumes:
+      - widget_dist:/usr/share/nginx/html
+    networks:
+      - backend
 
   host-allowed:
     build:
@@ -199,6 +308,8 @@ services:
         condition: service_healthy
     ports:
       - "${HOST_PORT_ALLOWED:-8090}:80"
+    networks:
+      - backend
 
   host-disallowed:
     build:
@@ -211,7 +322,16 @@ services:
         condition: service_healthy
     ports:
       - "${HOST_PORT_DISALLOWED:-8091}:80"
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
 
 volumes:
   pg_data:
   minio_data:
+  ollama_data:
+  pgadmin_data:
+  widget_dist:

@@ -4,23 +4,90 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Maintainer's Copilot — Disallowed Host Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; background: #fff1f2; }
-    h1 { color: #9f1239; }
-    p { color: #475569; }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Inter',system-ui,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column}
+    nav{display:flex;align-items:center;gap:12px;padding:1rem 2rem;border-bottom:1px solid #1e293b;background:#0a1628}
+    .logo-icon{width:32px;height:32px;background:linear-gradient(135deg,#22c55e,#16a34a);border-radius:8px;display:flex;align-items:center;justify-content:center}
+    .logo-text{font-weight:700;font-size:.9rem;color:#f1f5f9}
+    .badge{margin-left:auto;background:#ef444420;border:1px solid #ef444440;border-radius:6px;padding:4px 12px;font-size:.75rem;color:#ef4444;font-weight:500}
+    main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem 2rem;text-align:center}
+    .hero-tag{display:inline-flex;align-items:center;gap:6px;background:#ef444412;border:1px solid #ef444430;border-radius:100px;padding:4px 14px;font-size:.75rem;color:#ef4444;font-weight:500;margin-bottom:1.5rem}
+    .dot{width:6px;height:6px;border-radius:50%;background:#ef4444}
+    h1{font-size:clamp(2rem,5vw,3rem);font-weight:700;color:#f1f5f9;letter-spacing:-.03em;line-height:1.1;margin-bottom:1rem;max-width:600px}
+    h1 span{color:#ef4444}
+    p.subtitle{font-size:1rem;color:#64748b;max-width:480px;line-height:1.65;margin-bottom:2.5rem}
+    .csp-card{background:#1e293b;border:1px solid #ef444430;border-radius:14px;padding:1.5rem 2rem;max-width:600px;width:100%;margin-bottom:2rem;text-align:left}
+    .csp-card-title{display:flex;align-items:center;gap:8px;font-size:.875rem;font-weight:600;color:#ef4444;margin-bottom:1rem}
+    .csp-card-body{font-size:.8rem;color:#94a3b8;line-height:1.6}
+    .csp-card-body strong{color:#e2e8f0}
+    .steps{display:grid;gap:.75rem;max-width:600px;width:100%;margin-bottom:2rem}
+    .step{display:flex;align-items:flex-start;gap:12px;background:#1e293b;border:1px solid #334155;border-radius:10px;padding:1rem}
+    .step-num{width:24px;height:24px;border-radius:50%;background:#ef444420;border:1px solid #ef444440;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:#ef4444;font-weight:700;flex-shrink:0;margin-top:1px}
+    .step-text{font-size:.8rem;color:#94a3b8;line-height:1.5}
+    .step-text strong{color:#e2e8f0}
+    pre{background:#0a1628;border:1px solid #1e293b;border-radius:10px;padding:1rem 1.25rem;font-family:'JetBrains Mono',monospace;font-size:.78rem;color:#ef4444;text-align:left;max-width:560px;overflow-x:auto}
+    .cc{color:#475569}
+    footer{padding:1rem 2rem;border-top:1px solid #1e293b;text-align:center;font-size:.75rem;color:#334155}
   </style>
 </head>
 <body>
-  <h1>Disallowed Host (port 8091)</h1>
-  <p>This origin is <strong>NOT</strong> listed in the widget's <code>allowed_origins</code> field.
-     The browser should block the iframe via <code>Content-Security-Policy: frame-ancestors</code>
-     and the widget must not render.</p>
+  <nav>
+    <div class="logo-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+      </svg>
+    </div>
+    <span class="logo-text">Maintainer's Copilot</span>
+    <span class="badge">&#10007; Disallowed origin &mdash; widget blocked</span>
+  </nav>
+  <main>
+    <div class="hero-tag"><div class="dot"></div>Demo &mdash; disallowed origin (port 8091)</div>
+    <h1>CSP blocks the<br><span>widget iframe</span></h1>
+    <p class="subtitle">This page demonstrates the security boundary. The widget embed script runs, but the browser enforces <code>Content-Security-Policy: frame-ancestors</code> and refuses to display the iframe.</p>
 
-  <script
-    src="http://localhost:8000/widget.js"
-    data-widget-id="REPLACE_WITH_WIDGET_ID"
-    data-api-host="http://localhost:8000"
-    async
-  ></script>
+    <div class="csp-card">
+      <div class="csp-card-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        How the block works
+      </div>
+      <div class="csp-card-body">
+        When the <code>GET /embed?widget_id=...</code> response is served, the API reads the widget's
+        <strong>allowed_origins</strong> from the database and sets:<br/><br/>
+        <code>Content-Security-Policy: frame-ancestors http://localhost:8090</code><br/><br/>
+        Because this page is served from <strong>port 8091</strong> (not in the allowlist), the browser
+        refuses to render the iframe and logs a CSP violation to the console.
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-text">Open DevTools → <strong>Console</strong> tab to see the CSP violation error</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-text">The chat bubble <strong>does not appear</strong> in the bottom-right corner</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-text">Compare with the <strong>allowed</strong> host at <a href="http://localhost:8090" style="color:#22c55e">localhost:8090</a> where the widget loads normally</div>
+      </div>
+    </div>
+
+    <pre><span class="cc">&lt;!-- Same embed snippet, different origin --&gt;</span>
+&lt;script src="http://localhost:8000/widget.js"
+        data-widget-id="wgt_49595af3"
+        data-api-host="http://localhost:8000"
+        async&gt;&lt;/script&gt;</pre>
+  </main>
+  <footer>Maintainer's Copilot &middot; AIE Bootcamp Week 7 &middot; <strong>Disallowed</strong> origin demo</footer>
+
+  <script src="http://localhost:8000/widget.js"
+          data-widget-id="wgt_49595af3"
+          data-api-host="http://localhost:8000"
+          async></script>
 </body>
 </html>

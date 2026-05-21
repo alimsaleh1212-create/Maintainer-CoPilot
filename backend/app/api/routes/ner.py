@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-import spacy
 import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -13,11 +12,11 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/ner", tags=["ner"])
 
-# Load spaCy model once (in production, load in lifespan)
+# spaCy is optional — API image uses regex-only NER; model-server image has torch+transformers.
 try:
+    import spacy  # type: ignore[import-untyped]
     nlp = spacy.load("en_core_web_sm")
-except OSError:
-    logger.warning("spacy_model_not_found", installing="en_core_web_sm")
+except (ImportError, OSError):
     nlp = None
 
 

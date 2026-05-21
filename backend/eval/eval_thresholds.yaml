@@ -12,6 +12,12 @@ classification:
     Thresholds are set defensibly above zero but allow for statistical noise.
 
 rag:
-  faithfulness: 0.80      # Placeholder — will be set after WED RAG golden set eval
-  answer_relevancy: 0.75
-  hit_at_5: 0.65
+  faithfulness: 0.80      # RAGAS: answer grounded in retrieved context
+  answer_relevancy: 0.75  # RAGAS: answer is relevant to question
+  hit_at_5: 0.70          # Retrieval: ground-truth chunk in top-5
+  rationale: |
+    Thresholds chosen for MONAI docs + issue retrieval use case.
+    Faithfulness: Medical docs are precise; 0.80 ensures grounding.
+    Answer relevancy: MONAI questions are technical; 0.75 = high semantic match.
+    Hit@5: With multi-query + hybrid retrieval, 70% Hit@5 on golden set is realistic.
+    Will be tuned after golden-set eval (WED step 8).

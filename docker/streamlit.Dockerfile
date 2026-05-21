@@ -10,14 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 FROM base AS deps
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-cache
 
-FROM base AS runtime
-COPY --from=deps /app/.venv /app/.venv
+FROM deps AS runtime
 COPY . .
-
-ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv
-
+ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8501

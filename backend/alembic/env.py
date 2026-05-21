@@ -9,7 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from logging.config import fileConfig
+from pathlib import Path
+
+# Ensure the backend root (/app inside containers, or backend/ locally) is on
+# sys.path so 'from app.repositories...' resolves regardless of how alembic
+# is invoked (container, local CLI, pytest).
+_backend_root = Path(__file__).resolve().parent.parent
+if str(_backend_root) not in sys.path:
+    sys.path.insert(0, str(_backend_root))
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
