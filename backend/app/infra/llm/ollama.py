@@ -24,7 +24,7 @@ import httpx
 import structlog
 
 from app.domain.errors import ToolFailure
-from app.infra.llm.base import LLMMessage, ToolCall
+from app.infra.llm.base import ToolCall
 
 logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 

@@ -59,16 +59,9 @@ class CorpusIngestor:
                         # Create tsvector content
                         tsvector_text = f"{chunk.text} {title}"
 
-                        # Create record
-                        chunk_id = self._generate_chunk_id(title, chunk.text)
-                        chunk_create = RagChunkCreate(
-                            chunk_id=chunk_id,
-                            text=chunk.text,
-                            source="docs",
-                            metadata={"title": title, **chunk.metadata},
-                        )
-
                         # Insert into database
+                        chunk_id = self._generate_chunk_id(title, chunk.text)
+                        doc_metadata: dict[str, Any] = {"title": title, **chunk.metadata}
                         await self._insert_chunk(
                             db_session=db_session,
                             chunk_id=chunk_id,
@@ -76,7 +69,7 @@ class CorpusIngestor:
                             source="docs",
                             embedding=embedding,
                             tsvector_text=tsvector_text,
-                            metadata=chunk_create.metadata,
+                            metadata=doc_metadata,
                         )
 
                         stats["chunks_count"] += 1

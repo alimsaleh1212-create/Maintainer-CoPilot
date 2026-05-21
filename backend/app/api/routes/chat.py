@@ -20,7 +20,6 @@ from app.api.dependencies import (
     RAGServiceDep,
     SettingsDep,
 )
-
 from app.api.routes.auth import get_current_user
 from app.repositories.models import User
 

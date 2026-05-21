@@ -29,6 +29,8 @@ from app.domain.errors import ToolFailure
 from app.domain.tool_error import ToolError
 from app.infra.llm.base import ToolCall
 from app.infra.redaction import redact_text
+from app.infra.tracing import TracingClient
+from app.ml.ner import extract_entities as _ner_extract_entities
 from app.services.classification import ClassificationService
 from app.services.memory import MemoryService
 from app.services.rag import RAGService
@@ -41,6 +43,11 @@ logger = structlog.get_logger(__name__)
 
 MAX_TOOL_ROUNDS = 5
 _SYSTEM_PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "system_chatbot.md"
+_SUMMARIZE_PROMPT = (
+    "Summarize the following text in 150 words or less. "
+    "Be concise and preserve the key information.\n\n"
+    "Text:\n{text}\n\nSummary:"
+)
 
 
 def _load_system_prompt() -> str:
@@ -131,9 +138,11 @@ class ChatbotService:
         self,
         primary_llm: GeminiClient,
         fallback_llm: OllamaClient,
+        tracer: TracingClient | None = None,
     ) -> None:
         self._primary = primary_llm
         self._fallback = fallback_llm
+        self._tracer = tracer or TracingClient(None)
         self._system_prompt = _load_system_prompt()
 
     # ------------------------------------------------------------------
@@ -166,6 +175,12 @@ class ChatbotService:
         Returns:
             Tuple of (final_response_text, tools_used_list).
         """
+        trace = self._tracer.start_trace(
+            "chat_turn",
+            user_id=str(user_id),
+            metadata={"conversation_id": conversation_id},
+        )
+
         # 1. Short-term history
         history = await memory_service.get_history(conversation_id)
 
@@ -186,7 +201,7 @@ class ChatbotService:
         assistant_content = ""
 
         for _round in range(MAX_TOOL_ROUNDS):
-            text, tool_calls = await self._call_llm(messages, system_prompt)
+            text, tool_calls = await self._call_llm(messages, system_prompt, trace=trace)
             assistant_content = text
 
             if not tool_calls:
@@ -213,6 +228,7 @@ class ChatbotService:
                     classification_service=classification_service,
                     rag_service=rag_service,
                     db_session=db_session,
+                    trace=trace,
                 )
                 tools_used.append(tc.name)
 
@@ -252,38 +268,41 @@ class ChatbotService:
         self,
         messages: list[dict[str, Any]],
         system_prompt: str,
+        trace: Any = None,
     ) -> tuple[str, list[ToolCall]]:
         """Try primary LLM with tools; fall back to Ollama plain chat on failure.
 
         Args:
             messages: Full conversation history in extended format.
             system_prompt: System instruction to pass to the LLM.
+            trace: Langfuse trace to attach the span to (optional).
 
         Returns:
             Tuple of (text_response, tool_calls). tool_calls is empty on fallback.
         """
-        try:
-            return await self._primary.tool_call(
-                messages=messages,
-                tools=_TOOL_SCHEMAS,
-                system_prompt=system_prompt,
-            )
-        except Exception as exc:
-            logger.warning(
-                "chatbot.primary_llm_failed_falling_back",
-                error=str(exc),
-                fallback="ollama",
-            )
+        with self._tracer.span(trace, name="llm_call", input={"message_count": len(messages)}):
+            try:
+                return await self._primary.tool_call(
+                    messages=messages,
+                    tools=_TOOL_SCHEMAS,
+                    system_prompt=system_prompt,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "chatbot.primary_llm_failed_falling_back",
+                    error=str(exc),
+                    fallback="ollama",
+                )
 
-        try:
-            text = await self._fallback.chat(
-                messages=messages,
-                system_prompt=system_prompt,
-            )
-            return text, []
-        except Exception as exc:
-            logger.exception("chatbot.fallback_llm_failed", error=str(exc))
-            return "I'm temporarily unavailable. Please try again in a moment.", []
+            try:
+                text = await self._fallback.chat(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                )
+                return text, []
+            except Exception as exc:
+                logger.exception("chatbot.fallback_llm_failed", error=str(exc))
+                return "I'm temporarily unavailable. Please try again in a moment.", []
 
     # ------------------------------------------------------------------
     # Tool execution dispatcher
@@ -298,6 +317,7 @@ class ChatbotService:
         classification_service: ClassificationService,
         rag_service: RAGService,
         db_session: Any,
+        trace: Any = None,
     ) -> dict[str, Any]:
         """Dispatch a tool call and return a structured result.
 
@@ -312,6 +332,7 @@ class ChatbotService:
             classification_service: ClassificationService instance.
             rag_service: RAGService instance.
             db_session: SQLAlchemy AsyncSession.
+            trace: Langfuse trace to attach the tool span to (optional).
 
         Returns:
             Dict with tool result or ToolError structure.
@@ -319,68 +340,78 @@ class ChatbotService:
         tool_name = tool_call.name
         tool_args = tool_call.arguments
 
-        try:
-            if tool_name == "classify_issue":
-                result = await classification_service.classify(tool_args.get("text", ""))
-                return result.model_dump()
+        with self._tracer.span(
+            trace,
+            name=f"tool_{tool_name}",
+            input={"tool_name": tool_name, "args": tool_args},
+        ):
+            try:
+                if tool_name == "classify_issue":
+                    result = await classification_service.classify(tool_args.get("text", ""))
+                    return result.model_dump()
 
-            if tool_name == "rag_search":
-                search_results = await rag_service.search(
-                    query=tool_args.get("query", ""),
-                    db_session=db_session,
-                    gemini_api_key="",  # RAG uses Ollama embedder; key unused
-                    top_k=int(tool_args.get("top_k", 5)),
+                if tool_name == "rag_search":
+                    search_results = await rag_service.search(
+                        query=tool_args.get("query", ""),
+                        db_session=db_session,
+                        gemini_api_key="",  # RAG uses Ollama embedder; key unused
+                        top_k=int(tool_args.get("top_k", 5)),
+                    )
+                    return {
+                        "query": search_results.query,
+                        "chunks": [
+                            {"text": c.text, "source": c.source, "score": c.score}
+                            for c in search_results.chunks
+                        ],
+                    }
+
+                if tool_name == "write_memory":
+                    memory = await memory_service.save_memory(
+                        user_id=user_id,
+                        summary=tool_args.get("summary", ""),
+                    )
+                    return {"memory_id": str(memory.id), "status": "saved"}
+
+                if tool_name == "extract_entities":
+                    text_ner: str = tool_args.get("text", "")
+                    entities = await _ner_extract_entities(text_ner)
+                    logger.info("chatbot.tool_extract_entities", entity_count=len(entities))
+                    return {"entities": entities}
+
+                if tool_name == "summarize_text":
+                    text_sum: str = tool_args.get("text", "")
+                    prompt = _SUMMARIZE_PROMPT.format(text=text_sum)
+                    summary = await self._primary.chat(
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    return {"summary": summary.strip()}
+
+                logger.warning("chatbot.unknown_tool", tool_name=tool_name)
+                return ToolError(
+                    tool_name=tool_name,
+                    error=f"Unknown tool: {tool_name}",
+                    retryable=False,
+                ).model_dump()
+
+            except ToolFailure as exc:
+                logger.warning(
+                    "chatbot.tool_failure",
+                    tool_name=tool_name,
+                    error=exc.message,
+                    retryable=exc.retryable,
                 )
-                return {
-                    "query": search_results.query,
-                    "chunks": [
-                        {"text": c.text, "source": c.source, "score": c.score}
-                        for c in search_results.chunks
-                    ],
-                }
+                return ToolError(
+                    tool_name=tool_name,
+                    error=exc.message,
+                    retryable=exc.retryable,
+                ).model_dump()
 
-            if tool_name == "write_memory":
-                memory = await memory_service.save_memory(
-                    user_id=user_id,
-                    summary=tool_args.get("summary", ""),
+            except Exception as exc:
+                logger.exception(
+                    "chatbot.tool_unexpected_error", tool_name=tool_name, error=str(exc)
                 )
-                return {"memory_id": str(memory.id), "status": "saved"}
-
-            if tool_name == "extract_entities":
-                text_ner: str = tool_args.get("text", "")
-                logger.info("chatbot.tool_extract_entities", text_length=len(text_ner))
-                return {"entities": [], "note": "NER via /ner endpoint"}
-
-            if tool_name == "summarize_text":
-                text_sum: str = tool_args.get("text", "")
-                return {
-                    "summary": text_sum[:200] + "..." if len(text_sum) > 200 else text_sum,
-                }
-
-            logger.warning("chatbot.unknown_tool", tool_name=tool_name)
-            return ToolError(
-                tool_name=tool_name,
-                error=f"Unknown tool: {tool_name}",
-                retryable=False,
-            ).model_dump()
-
-        except ToolFailure as exc:
-            logger.warning(
-                "chatbot.tool_failure",
-                tool_name=tool_name,
-                error=exc.message,
-                retryable=exc.retryable,
-            )
-            return ToolError(
-                tool_name=tool_name,
-                error=exc.message,
-                retryable=exc.retryable,
-            ).model_dump()
-
-        except Exception as exc:
-            logger.exception("chatbot.tool_unexpected_error", tool_name=tool_name, error=str(exc))
-            return ToolError(
-                tool_name=tool_name,
-                error=f"Unexpected error in {tool_name}: {type(exc).__name__}",
-                retryable=False,
-            ).model_dump()
+                return ToolError(
+                    tool_name=tool_name,
+                    error=f"Unexpected error in {tool_name}: {type(exc).__name__}",
+                    retryable=False,
+                ).model_dump()

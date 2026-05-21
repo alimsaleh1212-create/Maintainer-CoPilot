@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 logger = structlog.get_logger(__name__)

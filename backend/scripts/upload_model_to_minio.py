@@ -71,7 +71,7 @@ def main() -> None:
                 print(f"  ERROR uploading {object_name}: {e}")
 
     print(f"\nDone: {uploaded} files uploaded to minio://{BUCKET}/{PREFIX}")
-    print(f"\nSet in model-server environment:")
+    print("\nSet in model-server environment:")
     print(f"  MINIO_ENDPOINT={MINIO_ENDPOINT}")
     print(f"  MINIO_BUCKET={BUCKET}")
     print(f"  MINIO_MODEL_PREFIX={PREFIX}")

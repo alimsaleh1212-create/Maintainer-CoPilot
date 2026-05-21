@@ -7,12 +7,11 @@ and tool failures are recoverable (not 500).
 from __future__ import annotations
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.exceptions import add_exception_handlers
 from app.domain.errors import (
-    AppError,
     NotFoundError,
     PermissionDenied,
     ToolFailure,
