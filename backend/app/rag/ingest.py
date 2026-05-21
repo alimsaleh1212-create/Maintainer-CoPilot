@@ -53,10 +53,11 @@ class CorpusIngestor:
             Stats dict ``{ingested, skipped, errors}``.
         """
         excluded = exclude_issue_ids or set()
-        stats = {"ingested": 0, "skipped": 0, "errors": 0}
+        stats = {"ingested": 0, "skipped": 0, "errors": 0, "already_present": 0}
         logger.info("corpus_ingest.issues_start", total=len(issues), excluded=len(excluded))
 
-        pending: list[Chunk] = []
+        # Pre-build chunks so we can dedupe against the DB before embedding
+        candidate: list[Chunk] = []
         for issue in issues:
             number = issue.get("number") or issue.get("id")
             if number in excluded:
@@ -66,7 +67,20 @@ class CorpusIngestor:
             if len(chunk.text) < 50:
                 stats["skipped"] += 1
                 continue
-            pending.append(chunk)
+            candidate.append(chunk)
+
+        # Skip chunks already in the DB — saves the slow embed roundtrip
+        existing = await self._existing_chunk_ids(
+            db_session, [c.chunk_id for c in candidate]
+        )
+        pending = [c for c in candidate if c.chunk_id not in existing]
+        stats["already_present"] = len(candidate) - len(pending)
+        logger.info(
+            "corpus_ingest.issues_dedup",
+            candidate=len(candidate),
+            already_present=stats["already_present"],
+            new=len(pending),
+        )
 
         ok, errs = await self._embed_and_upsert_batched(pending, embedder, db_session)
         stats["ingested"] += ok
@@ -93,18 +107,30 @@ class CorpusIngestor:
         Returns:
             Stats dict ``{files, chunks, errors}``.
         """
-        stats = {"files": 0, "chunks": 0, "errors": 0}
+        stats = {"files": 0, "chunks": 0, "errors": 0, "already_present": 0}
         logger.info("corpus_ingest.wiki_start", files=len(wiki_files))
 
-        pending: list[Chunk] = []
+        candidate: list[Chunk] = []
         for file_path, content in wiki_files:
             try:
                 chunks = self.markdown_chunker.chunk(content, file_path=file_path)
-                pending.extend(chunks)
+                candidate.extend(chunks)
                 stats["files"] += 1
             except Exception as exc:  # noqa: BLE001
                 logger.exception("corpus_ingest.wiki_failed", file=file_path, error=str(exc))
                 stats["errors"] += 1
+
+        existing = await self._existing_chunk_ids(
+            db_session, [c.chunk_id for c in candidate]
+        )
+        pending = [c for c in candidate if c.chunk_id not in existing]
+        stats["already_present"] = len(candidate) - len(pending)
+        logger.info(
+            "corpus_ingest.wiki_dedup",
+            candidate=len(candidate),
+            already_present=stats["already_present"],
+            new=len(pending),
+        )
 
         ok, errs = await self._embed_and_upsert_batched(pending, embedder, db_session)
         stats["chunks"] += ok
@@ -112,6 +138,26 @@ class CorpusIngestor:
 
         logger.info("corpus_ingest.wiki_done", **stats)
         return stats
+
+    # ── Dedup helper ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def _existing_chunk_ids(
+        db_session: AsyncSession,
+        chunk_ids: list[str],
+    ) -> set[str]:
+        """Return the subset of ``chunk_ids`` that already exist in rag_chunks.
+
+        Used to skip re-embedding chunks we already have, so re-runs are
+        ~free instead of slow no-op upserts.
+        """
+        if not chunk_ids:
+            return set()
+        stmt = text(
+            "SELECT chunk_id FROM rag_chunks WHERE chunk_id = ANY(:ids)"
+        ).bindparams(ids=chunk_ids)
+        rows = (await db_session.execute(stmt)).fetchall()
+        return {row.chunk_id for row in rows}
 
     # ── Embed + upsert in batches ────────────────────────────────────────────
 

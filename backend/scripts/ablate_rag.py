@@ -179,16 +179,41 @@ async def main() -> None:
     lines.append("")
     lines.append(
         "Each row is one of 10 probe queries. Five are wiki-expected "
-        "(developer/conceptual), five are issue-expected (bug-style). The "
-        "`hit` column shows whether the expected source surfaced in top-5."
+        "(developer/conceptual), five are issue-expected (bug-style)."
     )
     lines.append("")
-
-    # Summary table — Hit@5 per config × expected source
-    lines.append("## Hit@5 summary")
+    lines.append("**Metrics:**")
+    lines.append("- **Hit@5** — did the expected source surface in top-5? (accuracy)")
+    lines.append("- **Top-1 score** — confidence of the best chunk (higher = better grounding)")
+    lines.append("- **p50 / p95 latency** — half / tail user-facing wait")
+    lines.append("- **Score uplift vs A** — top-1 score gain over the naive baseline")
     lines.append("")
-    lines.append("| Config | Wiki Hit@5 | Issue Hit@5 | Combined Hit@5 | Avg latency (ms) |")
-    lines.append("|---|---|---|---|---|")
+
+    # Summary table — accuracy + latency + score per config
+    def _pct(num: int, denom: int) -> str:
+        return f"{num}/{denom} ({100*num/max(1,denom):.0f}%)"
+
+    def _percentile(vals: list[float], p: float) -> float:
+        if not vals:
+            return 0.0
+        s = sorted(vals)
+        k = (len(s) - 1) * p
+        f = int(k)
+        c = min(f + 1, len(s) - 1)
+        return s[f] + (s[c] - s[f]) * (k - f)
+
+    baseline_top1 = {
+        r["query"]: (r["top_5"][0]["score"] if r["top_5"] else 0.0)
+        for r in all_results["A. Naive"]
+    }
+
+    lines.append("## Accuracy × latency summary")
+    lines.append("")
+    lines.append(
+        "| Config | Wiki Hit@5 | Issue Hit@5 | Combined | Avg top-1 score | "
+        "Δ score vs A | p50 lat | p95 lat |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|")
     for name, _ in configs:
         runs = all_results[name]
         wiki = [r for r in runs if r["expected"] == "wiki"]
@@ -196,10 +221,20 @@ async def main() -> None:
         wiki_hit = sum(1 for r in wiki if r["hit"] == "✓")
         issue_hit = sum(1 for r in issue if r["hit"] == "✓")
         total = wiki_hit + issue_hit
-        avg_lat = sum(r["latency_ms"] for r in runs) / max(1, len(runs))
+        top1_scores = [r["top_5"][0]["score"] for r in runs if r["top_5"]]
+        avg_top1 = sum(top1_scores) / max(1, len(top1_scores))
+        delta = sum(
+            (r["top_5"][0]["score"] - baseline_top1.get(r["query"], 0.0))
+            for r in runs
+            if r["top_5"]
+        ) / max(1, len(runs))
+        lats = [r["latency_ms"] for r in runs]
+        p50 = _percentile(lats, 0.50)
+        p95 = _percentile(lats, 0.95)
         lines.append(
-            f"| {name} | {wiki_hit}/{len(wiki)} | {issue_hit}/{len(issue)} | "
-            f"{total}/{len(runs)} | {avg_lat:.0f} |"
+            f"| {name} | {_pct(wiki_hit, len(wiki))} | {_pct(issue_hit, len(issue))} | "
+            f"{_pct(total, len(runs))} | {avg_top1:.3f} | {delta:+.3f} | "
+            f"{p50:.0f}ms | {p95:.0f}ms |"
         )
     lines.append("")
 
