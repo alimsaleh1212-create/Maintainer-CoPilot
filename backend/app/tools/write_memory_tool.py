@@ -72,6 +72,4 @@ async def write_memory(
         return {"memory_id": str(memory.id), "status": "stored"}
     except Exception as exc:
         logger.warning("write_memory_tool.failed", user_id=str(user_id), error=str(exc))
-        raise ToolFailure(
-            error="memory_write_failed", retryable=False, detail=str(exc)
-        ) from exc
+        raise ToolFailure(error="memory_write_failed", retryable=False, detail=str(exc)) from exc

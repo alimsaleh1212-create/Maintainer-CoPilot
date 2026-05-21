@@ -25,10 +25,10 @@ class RagChunk(Base):
     embedding: Mapped[list[float]] = mapped_column(
         Vector(768), nullable=False
     )  # nomic-embed-text via Ollama: 768-dim
-    tsvector: Mapped[object] = mapped_column(
-        TSVECTOR(), nullable=False
-    )  # For BM25 sparse search
-    chunk_metadata: Mapped[dict[str, str]] = mapped_column("metadata", JSONB(), default={}, nullable=False)
+    tsvector: Mapped[object] = mapped_column(TSVECTOR(), nullable=False)  # For BM25 sparse search
+    chunk_metadata: Mapped[dict[str, str]] = mapped_column(
+        "metadata", JSONB(), default={}, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

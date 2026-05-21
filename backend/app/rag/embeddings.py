@@ -23,9 +23,7 @@ class EmbeddingModel:
     for chatbot workloads (embeddings ~50ms vs LLM calls ~1-3s).
     """
 
-    def __init__(
-        self, model_name: str = MODEL_NAME, ollama_host: str = OLLAMA_HOST
-    ):
+    def __init__(self, model_name: str = MODEL_NAME, ollama_host: str = OLLAMA_HOST):
         self.model_name = model_name
         self.ollama_host = ollama_host
         self.client = httpx.AsyncClient(timeout=30.0)

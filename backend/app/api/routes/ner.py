@@ -45,7 +45,9 @@ _SPACY_LABELS = frozenset({"ORG", "PERSON", "PRODUCT", "GPE", "NORP"})
 class NERRequest(BaseModel):
     """Request body for /ner."""
 
-    text: str = Field(..., min_length=1, max_length=4096, description="Text to extract entities from")
+    text: str = Field(
+        ..., min_length=1, max_length=4096, description="Text to extract entities from"
+    )
 
 
 class Entity(BaseModel):

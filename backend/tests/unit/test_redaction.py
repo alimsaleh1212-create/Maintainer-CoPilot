@@ -9,7 +9,6 @@ Three paths under test:
   3. Memory  — redact_text scrubs the summary before the pgvector write.
 """
 
-
 from app.infra.redaction import redact_dict, redact_text, structlog_redaction_processor
 
 # ---------------------------------------------------------------------------
@@ -21,11 +20,7 @@ FAKE_GEMINI = "AIzaTestFakeGeminiKey1234567890abcdefghij"
 FAKE_GITHUB = "ghp_testFakeGitHubPATAAAABBBBCCCCDDDDEEEE"  # 40 chars after ghp_
 FAKE_LANGFUSE_SK = "sk-lf-testFakeLangfuseKey1234567890abcdef"
 FAKE_AWS = "AKIA1234567890ABCDEF"  # exactly AKIA + 16 uppercase alphanumerics
-FAKE_JWT = (
-    "eyJhbGciOiJIUzI1NiJ9"
-    ".eyJzdWIiOiJ1c2VyMSJ9"
-    ".testFakeJWTSignatureABCDEFGH"
-)
+FAKE_JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.testFakeJWTSignatureABCDEFGH"
 
 
 # ---------------------------------------------------------------------------

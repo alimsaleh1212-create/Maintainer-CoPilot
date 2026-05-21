@@ -121,6 +121,4 @@ class RAGService:
 
         except Exception as exc:
             logger.exception("rag_search_failed", query=query[:100], error=str(exc))
-            raise ToolFailure(
-                f"RAG search failed: {str(exc)}", retryable=True
-            ) from exc
+            raise ToolFailure(f"RAG search failed: {str(exc)}", retryable=True) from exc

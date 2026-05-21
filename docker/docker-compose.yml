@@ -23,7 +23,7 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     environment:
-      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_EMAIL:-admin@dev.local}"
+      PGADMIN_DEFAULT_EMAIL: "${PGADMIN_EMAIL:-admin@example.com}"
       PGADMIN_DEFAULT_PASSWORD: "${PGADMIN_PASSWORD:-admin}"
       PGADMIN_CONFIG_SERVER_MODE: "False"
     depends_on:
@@ -133,12 +133,12 @@ services:
       - backend
 
   langfuse:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://copilot:copilot@db:5432/langfuse
+      DATABASE_URL: postgresql://copilot:${POSTGRES_PASSWORD:-copilot}@db:5432/langfuse
       NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3000}
       NEXTAUTH_SECRET: dev-nextauth-secret
       SALT: dev-salt
@@ -150,6 +150,29 @@ services:
       start_period: 30s
     ports:
       - "${LANGFUSE_PORT:-3000}:3000"
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+  # minio-init — creates the 'copilot' bucket and seeds model artifacts.
+  # Runs once after MinIO is healthy, then exits.  The mc client is built into
+  # the minio/mc image so no extra tooling is needed.
+  # ---------------------------------------------------------------------------
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 $${MINIO_ACCESS_KEY:-minioadmin} $${MINIO_SECRET_KEY:-minioadmin};
+        mc mb --ignore-existing local/copilot;
+        echo 'MinIO bucket ready.';
+      "
+    environment:
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
+    restart: "no"
     networks:
       - backend
 
@@ -222,15 +245,15 @@ services:
       # CLASSIFIER_MODEL_DIR: local cache dir where weights land after pull
       CLASSIFIER_MODEL_DIR: "/tmp/classifier/best"
       MINIO_ENDPOINT: "minio:9000"
-      MINIO_ACCESS_KEY: "minioadmin"
-      MINIO_SECRET_KEY: "minioadmin"
+      MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY:-minioadmin}"
+      MINIO_SECRET_KEY: "${MINIO_SECRET_KEY:-minioadmin}"
       MINIO_BUCKET: "copilot"
       MINIO_MODEL_PREFIX: "models/classifier/best"
     depends_on:
       vault-init:
         condition: service_completed_successfully
-      minio:
-        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/healthz"]
       interval: 10s

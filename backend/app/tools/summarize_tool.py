@@ -50,6 +50,4 @@ async def summarize_issue(text: str, llm_client: object) -> str:
         return summary
     except Exception as exc:
         logger.warning("summarize_tool.failed", error=str(exc))
-        raise ToolFailure(
-            error="summarizer_unavailable", retryable=False, detail=str(exc)
-        ) from exc
+        raise ToolFailure(error="summarizer_unavailable", retryable=False, detail=str(exc)) from exc

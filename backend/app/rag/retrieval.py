@@ -92,9 +92,7 @@ class HybridRetriever:
             )
 
             # Dense search (pgvector)
-            dense_results = await self._dense_search(
-                query_var, embedding_fn, db_session
-            )
+            dense_results = await self._dense_search(query_var, embedding_fn, db_session)
 
             # Sparse search (BM25)
             sparse_results = await self._sparse_search(query_var, db_session)
@@ -118,9 +116,7 @@ class HybridRetriever:
 
         # Rerank if available
         if reranker:
-            ranked = await self._rerank(
-                query_variations[0], ranked, reranker
-            )
+            ranked = await self._rerank(query_variations[0], ranked, reranker)
 
         # Return top-k final
         return ranked[:top_k]
@@ -155,18 +151,15 @@ class HybridRetriever:
         # SQLAlchemy's text() parameter parser when directly adjacent to the
         # parameter placeholder (e.g. :name::type is mis-tokenised).
         embedding_str = str(query_embedding)
-        stmt = (
-            text(
-                "SELECT id, chunk_id, text, source, "
-                "       1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
-                "FROM rag_chunks "
-                "ORDER BY embedding <=> CAST(:query_embedding AS vector) "
-                "LIMIT :top_k"
-            )
-            .bindparams(
-                query_embedding=embedding_str,
-                top_k=top_k,
-            )
+        stmt = text(
+            "SELECT id, chunk_id, text, source, "
+            "       1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
+            "FROM rag_chunks "
+            "ORDER BY embedding <=> CAST(:query_embedding AS vector) "
+            "LIMIT :top_k"
+        ).bindparams(
+            query_embedding=embedding_str,
+            top_k=top_k,
         )
 
         results = await db_session.execute(stmt)

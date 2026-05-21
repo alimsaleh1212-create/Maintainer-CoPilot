@@ -73,9 +73,7 @@ class MemoryService:
             logger.warning("memory.history_parse_error", conversation_id=conversation_id)
             return []
 
-    async def append_message(
-        self, conversation_id: str, role: str, content: str
-    ) -> None:
+    async def append_message(self, conversation_id: str, role: str, content: str) -> None:
         """Append a single message to the Redis conversation history.
 
         Resets the TTL on every write so active conversations never expire
@@ -256,10 +254,7 @@ class MemoryService:
         """
         async with self._session_factory() as session:
             result = await session.execute(
-                select(Memory)
-                .where(Memory.user_id == user_id)
-                .order_by(Memory.created_at.desc())
+                select(Memory).where(Memory.user_id == user_id).order_by(Memory.created_at.desc())
             )
             memories: list[Memory] = list(result.scalars().all())
         return memories
-

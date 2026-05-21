@@ -146,6 +146,7 @@ def _apply_regex(text: str) -> list[dict[str, str]]:
 # spaCy loader (lazy, cached)
 # ---------------------------------------------------------------------------
 
+
 @lru_cache(maxsize=1)
 def _load_spacy() -> Any | None:
     """Load spaCy model, returning None if unavailable.
@@ -209,6 +210,7 @@ def _extract_spacy(text: str, nlp: Any) -> list[dict[str, str]]:
 # Deduplication helper
 # ---------------------------------------------------------------------------
 
+
 def _deduplicate(entities: list[dict[str, str]]) -> list[dict[str, str]]:
     """Remove duplicate spans (same start/end/label).
 
@@ -236,6 +238,7 @@ def _deduplicate(entities: list[dict[str, str]]) -> list[dict[str, str]]:
 # Synchronous inner implementation (called via asyncio.to_thread)
 # ---------------------------------------------------------------------------
 
+
 def _extract_sync(text: str) -> list[dict[str, str]]:
     """CPU-bound extraction combining spaCy + regex.
 
@@ -258,6 +261,7 @@ def _extract_sync(text: str) -> list[dict[str, str]]:
 # ---------------------------------------------------------------------------
 # Public async API
 # ---------------------------------------------------------------------------
+
 
 async def extract_entities(text: str) -> list[dict[str, str]]:
     """Extract code-shaped named entities from GitHub issue text.

@@ -209,14 +209,16 @@ class ChatbotService:
                 break
 
             # Append the assistant turn (with function calls) to history.
-            messages.append({
-                "role": "assistant",
-                "content": text,
-                "tool_calls": [
-                    {"name": tc.name, "arguments": tc.arguments, "id": tc.id}
-                    for tc in tool_calls
-                ],
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": text,
+                    "tool_calls": [
+                        {"name": tc.name, "arguments": tc.arguments, "id": tc.id}
+                        for tc in tool_calls
+                    ],
+                }
+            )
 
             # Execute each tool and append results.
             for tc in tool_calls:
@@ -232,12 +234,14 @@ class ChatbotService:
                 )
                 tools_used.append(tc.name)
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "tool_name": tc.name,
-                    "content": json.dumps(result),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "tool_name": tc.name,
+                        "content": json.dumps(result),
+                    }
+                )
         else:
             logger.warning(
                 "chatbot.max_tool_rounds_exceeded",
@@ -249,7 +253,9 @@ class ChatbotService:
 
         # 5. Persist to Redis (redact before write)
         await memory_service.append_message(conversation_id, "user", redact_text(user_message))
-        await memory_service.append_message(conversation_id, "assistant", redact_text(final_response))
+        await memory_service.append_message(
+            conversation_id, "assistant", redact_text(final_response)
+        )
 
         logger.info(
             "chatbot.turn_complete",

@@ -59,6 +59,4 @@ async def rag_search(
         return results
     except Exception as exc:
         logger.warning("rag_tool.failed", query=query[:80], error=str(exc))
-        raise ToolFailure(
-            error="rag_unavailable", retryable=True, detail=str(exc)
-        ) from exc
+        raise ToolFailure(error="rag_unavailable", retryable=True, detail=str(exc)) from exc

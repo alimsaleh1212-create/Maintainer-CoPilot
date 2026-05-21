@@ -144,9 +144,7 @@ class CorpusIngestor:
                         tsvector_text = f"{title} {chunk.text}"
 
                         # Create record with issue metadata
-                        chunk_id = self._generate_chunk_id(
-                            f"issue_{issue_id}", chunk.text
-                        )
+                        chunk_id = self._generate_chunk_id(f"issue_{issue_id}", chunk.text)
                         metadata = {
                             "issue_id": str(issue_id),
                             "labels": ",".join(issue.get("labels", [])),

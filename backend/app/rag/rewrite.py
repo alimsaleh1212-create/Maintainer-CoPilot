@@ -103,11 +103,7 @@ class MultiQueryExpander:
         variations.extend(template_variants)
 
         # If we have room and LLM available, use LLM for complex queries
-        if (
-            self.llm_fallback
-            and len(variations) < self.num_variations
-            and gemini_api_key
-        ):
+        if self.llm_fallback and len(variations) < self.num_variations and gemini_api_key:
             try:
                 llm_variants = await self._llm_expand(query, gemini_api_key)
                 variations.extend(llm_variants)
@@ -189,9 +185,7 @@ Alternative phrasings (one per line, no numbering):"""
             content = data["candidates"][0]["content"]["parts"][0]["text"]
 
             # Parse lines as variants
-            variants = [
-                line.strip() for line in content.split("\n") if line.strip()
-            ]
+            variants = [line.strip() for line in content.split("\n") if line.strip()]
             return variants[:2]  # Limit to 2
 
 

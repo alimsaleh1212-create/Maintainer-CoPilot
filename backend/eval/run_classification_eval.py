@@ -80,7 +80,9 @@ def run_evaluation() -> int:
         print("✓" if pass_flag else "✗")
 
     # Final result
-    all_pass = macro_pass and all(f1 >= required_per_class_f1_min for f1 in actual_per_class_f1.values())
+    all_pass = macro_pass and all(
+        f1 >= required_per_class_f1_min for f1 in actual_per_class_f1.values()
+    )
 
     if all_pass:
         print("\n✨ All thresholds PASS. Eval gate OK.")

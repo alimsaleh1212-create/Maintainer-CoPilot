@@ -56,6 +56,7 @@ def _load_system_prompt() -> str:
 # Summarizer class
 # ---------------------------------------------------------------------------
 
+
 class Summarizer:
     """LLM-backed summarizer for GitHub issue text.
 
@@ -95,6 +96,7 @@ class Summarizer:
 # ---------------------------------------------------------------------------
 # Convenience function
 # ---------------------------------------------------------------------------
+
 
 async def summarize_text(
     text: str,

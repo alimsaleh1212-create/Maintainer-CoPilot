@@ -204,9 +204,7 @@ class WidgetService:
         """
         async with self._session_factory() as session:
             result = await session.execute(
-                select(Widget)
-                .where(Widget.owner_id == owner_id)
-                .order_by(Widget.created_at.desc())
+                select(Widget).where(Widget.owner_id == owner_id).order_by(Widget.created_at.desc())
             )
             widgets: list[Widget] = list(result.scalars().all())
         return widgets

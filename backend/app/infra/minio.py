@@ -106,9 +106,7 @@ class MinIOClient:
         except RuntimeError:
             raise
         except Exception as exc:
-            raise RuntimeError(
-                f"Unexpected error ensuring MinIO bucket {bucket!r}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Unexpected error ensuring MinIO bucket {bucket!r}: {exc}") from exc
 
     async def upload_bytes(
         self,
@@ -150,9 +148,7 @@ class MinIOClient:
         try:
             await asyncio.to_thread(_sync)
         except S3Error as exc:
-            raise RuntimeError(
-                f"MinIO upload_bytes({bucket!r}, {key!r}) failed: {exc}"
-            ) from exc
+            raise RuntimeError(f"MinIO upload_bytes({bucket!r}, {key!r}) failed: {exc}") from exc
         except RuntimeError:
             raise
         except Exception as exc:
@@ -204,9 +200,7 @@ class MinIOClient:
         try:
             raw = await asyncio.to_thread(_sync)
         except S3Error as exc:
-            raise RuntimeError(
-                f"MinIO download_json({bucket!r}, {key!r}) failed: {exc}"
-            ) from exc
+            raise RuntimeError(f"MinIO download_json({bucket!r}, {key!r}) failed: {exc}") from exc
         except RuntimeError:
             raise
         except Exception as exc:
@@ -217,9 +211,7 @@ class MinIOClient:
         try:
             result: dict[str, Any] = json.loads(raw)
         except (json.JSONDecodeError, ValueError) as exc:
-            raise RuntimeError(
-                f"MinIO object {bucket!r}/{key!r} is not valid JSON: {exc}"
-            ) from exc
+            raise RuntimeError(f"MinIO object {bucket!r}/{key!r} is not valid JSON: {exc}") from exc
 
         logger.debug("minio.download_json", bucket=bucket, key=key, bytes=len(raw))
         return result

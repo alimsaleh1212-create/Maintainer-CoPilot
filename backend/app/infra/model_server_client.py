@@ -101,7 +101,9 @@ class ModelServerClient:
     """
 
     base_url: str
-    http_client: httpx.AsyncClient = field(default_factory=lambda: httpx.AsyncClient(timeout=_TIMEOUT_S))
+    http_client: httpx.AsyncClient = field(
+        default_factory=lambda: httpx.AsyncClient(timeout=_TIMEOUT_S)
+    )
 
     # ------------------------------------------------------------------
     # Public API
