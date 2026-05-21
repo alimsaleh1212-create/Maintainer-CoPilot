@@ -24,6 +24,9 @@ class RetrievedChunk:
     dense_score: float | None = None
     sparse_score: float | None = None
     rerank_score: float | None = None
+    parent_id: str | None = None
+    parent_text: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class HybridRetriever:
@@ -66,6 +69,7 @@ class HybridRetriever:
         db_session: Any,
         reranker: Any | None = None,
         top_k: int | None = None,
+        source_filter: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """Retrieve chunks using hybrid approach.
 
@@ -75,6 +79,8 @@ class HybridRetriever:
             db_session: SQLAlchemy async session
             reranker: Optional cross-encoder for reranking
             top_k: Number of final results to return (defaults to self.top_k_final)
+            source_filter: Restrict retrieval to these ``rag_chunks.source`` values
+                (e.g. ``["issue"]`` or ``["docs"]``). ``None`` = no filter.
 
         Returns:
             Top-k retrieved chunks, scored and deduplicated
@@ -89,13 +95,18 @@ class HybridRetriever:
                 "retrieval.query_variation",
                 query_original=query_variations[0],
                 query_var=query_var,
+                source_filter=source_filter,
             )
 
             # Dense search (pgvector)
-            dense_results = await self._dense_search(query_var, embedding_fn, db_session)
+            dense_results = await self._dense_search(
+                query_var, embedding_fn, db_session, source_filter=source_filter
+            )
 
             # Sparse search (BM25)
-            sparse_results = await self._sparse_search(query_var, db_session)
+            sparse_results = await self._sparse_search(
+                query_var, db_session, source_filter=source_filter
+            )
 
             # Combine scores
             combined = self._combine_scores(dense_results, sparse_results)
@@ -118,8 +129,13 @@ class HybridRetriever:
         if reranker:
             ranked = await self._rerank(query_variations[0], ranked, reranker)
 
-        # Return top-k final
-        return ranked[:top_k]
+        final = ranked[:top_k]
+
+        # Parent-expand: one extra round trip enriches each child with its
+        # full parent document so the LLM gets surrounding context.
+        await self._expand_parents(final, db_session)
+
+        return final
 
     async def _dense_search(
         self,
@@ -127,6 +143,7 @@ class HybridRetriever:
         embedding_fn: Callable[[str], Any],
         db_session: AsyncSession,
         top_k: int = 50,
+        source_filter: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """Dense search using pgvector similarity.
 
@@ -151,16 +168,18 @@ class HybridRetriever:
         # SQLAlchemy's text() parameter parser when directly adjacent to the
         # parameter placeholder (e.g. :name::type is mis-tokenised).
         embedding_str = str(query_embedding)
+        where_clause = ""
+        params: dict[str, Any] = {"query_embedding": embedding_str, "top_k": top_k}
+        if source_filter:
+            where_clause = "WHERE source = ANY(:sources) "
+            params["sources"] = source_filter
         stmt = text(
             "SELECT id, chunk_id, text, source, "
             "       1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
-            "FROM rag_chunks "
+            f"FROM rag_chunks {where_clause}"
             "ORDER BY embedding <=> CAST(:query_embedding AS vector) "
             "LIMIT :top_k"
-        ).bindparams(
-            query_embedding=embedding_str,
-            top_k=top_k,
-        )
+        ).bindparams(**params)
 
         results = await db_session.execute(stmt)
         rows = results.fetchall()
@@ -189,6 +208,7 @@ class HybridRetriever:
         query: str,
         db_session: AsyncSession,
         top_k: int = 50,
+        source_filter: list[str] | None = None,
     ) -> list[RetrievedChunk]:
         """Sparse search using BM25-like ranking (Postgres tsvector + ts_rank_cd).
 
@@ -205,14 +225,20 @@ class HybridRetriever:
         """
         # Convert query to Postgres tsquery format (space-separated words become OR clauses)
         # to_tsquery returns a tsquery; plainto_tsquery makes it safer for user input
+        where_extra = ""
+        params: dict[str, Any] = {"query": query, "top_k": top_k}
+        if source_filter:
+            where_extra = "AND source = ANY(:sources) "
+            params["sources"] = source_filter
         stmt = text(
             "SELECT id, chunk_id, text, source, "
             "       ts_rank_cd(tsvector, plainto_tsquery('english', :query)) as score "
             "FROM rag_chunks "
             "WHERE tsvector @@ plainto_tsquery('english', :query) "
+            f"{where_extra}"
             "ORDER BY score DESC "
             "LIMIT :top_k"
-        ).bindparams(query=query, top_k=top_k)
+        ).bindparams(**params)
 
         results = await db_session.execute(stmt)
         rows = results.fetchall()
@@ -282,6 +308,36 @@ class HybridRetriever:
                 )
 
         return list(combined.values())
+
+    async def _expand_parents(
+        self,
+        chunks: list[RetrievedChunk],
+        db_session: AsyncSession,
+    ) -> None:
+        """Fill ``parent_id`` / ``parent_text`` on each chunk in place.
+
+        Does a single ``SELECT chunk_id, parent_id, parent_text ...``
+        keyed by chunk_id. Wiki chunks get a non-null parent_text; issue
+        chunks get parent_id == chunk_id and parent_text remains None
+        (the child already is the parent).
+        """
+        if not chunks:
+            return
+        ids = [c.chunk_id for c in chunks]
+        stmt = text(
+            "SELECT chunk_id, parent_id, parent_text, metadata "
+            "FROM rag_chunks WHERE chunk_id = ANY(:ids)"
+        ).bindparams(ids=ids)
+        rows = (await db_session.execute(stmt)).fetchall()
+        by_id = {row.chunk_id: row for row in rows}
+        for c in chunks:
+            row = by_id.get(c.chunk_id)
+            if row is None:
+                continue
+            c.parent_id = row.parent_id
+            c.parent_text = row.parent_text
+            # metadata column is JSONB → driver returns dict
+            c.metadata = row.metadata if isinstance(row.metadata, dict) else None
 
     async def _rerank(
         self,

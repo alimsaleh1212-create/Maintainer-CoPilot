@@ -13,6 +13,10 @@ logger = structlog.get_logger(__name__)
 MODEL_NAME = "nomic-embed-text"
 EMBEDDING_DIM = 768  # nomic-embed-text produces 768-dim vectors
 OLLAMA_HOST = "http://ollama:11434"
+# nomic-embed-text has a 2048-token context. Code/markdown tokenizes denser
+# than prose (~1 token per 2-3 chars vs 1 per 4), so cap conservatively at
+# 3000 chars to stay under the limit and avoid Ollama 400s.
+MAX_INPUT_CHARS = 3000
 
 
 class EmbeddingModel:
@@ -26,7 +30,9 @@ class EmbeddingModel:
     def __init__(self, model_name: str = MODEL_NAME, ollama_host: str = OLLAMA_HOST):
         self.model_name = model_name
         self.ollama_host = ollama_host
-        self.client = httpx.AsyncClient(timeout=30.0)
+        # 180s — large batches (up to EMBED_BATCH=32) on CPU Ollama can take
+        # 30-60s. Query-time embeds use a single string and finish in <1s.
+        self.client = httpx.AsyncClient(timeout=180.0)
 
     async def ensure_model_pulled(self) -> None:
         """Pull model from Ollama registry if not present."""
@@ -56,11 +62,14 @@ class EmbeddingModel:
         Returns:
             List of embedding vectors (each is list[float])
         """
+        # Defensive truncate — model context is 2048 tokens, Ollama 400's
+        # on inputs >~10K chars in practice.
+        safe_texts = [t[:MAX_INPUT_CHARS] if t else " " for t in texts]
         try:
             # Ollama /api/embed accepts a list for batch embedding
             resp = await self.client.post(
                 f"{self.ollama_host}/api/embed",
-                json={"model": self.model_name, "input": texts},
+                json={"model": self.model_name, "input": safe_texts},
             )
             resp.raise_for_status()
             data = resp.json()

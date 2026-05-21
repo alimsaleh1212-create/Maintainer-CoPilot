@@ -61,6 +61,11 @@ logs/
 # MinIO data, downloaded datasets, trained model artifacts stay out of git
 data/
 artifacts/
+
+# --- RAG corpus (raw issues + MONAI wiki) — fetched, not source -------------
+# Re-pull on demand:
+#   git clone --depth 1 https://github.com/Project-MONAI/MONAI.wiki.git corpus/monai_wiki
+corpus/
 .minio-data/
 .postgres-data/
 .redis-data/

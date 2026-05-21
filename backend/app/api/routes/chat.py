@@ -7,6 +7,7 @@ Requires a valid JWT (Authorization: Bearer <token>).
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends
@@ -33,6 +34,9 @@ router = APIRouter(tags=["chat"])
 # ---------------------------------------------------------------------------
 
 
+SourceType = Literal["issue", "wiki"]
+
+
 class ChatRequest(BaseModel):
     """Incoming chat message."""
 
@@ -41,6 +45,31 @@ class ChatRequest(BaseModel):
         default=None,
         description="Existing conversation ID; omit to start a new conversation",
     )
+    rag_source_types: list[SourceType] | None = Field(
+        default=None,
+        description=(
+            "If the LLM calls rag_search, restrict it to these sources. "
+            "Empty/None = both issues and wiki."
+        ),
+    )
+    rag_min_confidence: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="Drop citations whose normalized score is below this threshold.",
+    )
+
+
+class CitationOut(BaseModel):
+    """A single citation surfaced under a chat answer."""
+
+    id: int
+    source_type: str
+    label: str
+    url: str | None
+    score: float
+    chunk_id: str
+    snippet: str
 
 
 class ChatResponse(BaseModel):
@@ -49,6 +78,10 @@ class ChatResponse(BaseModel):
     response: str = Field(..., description="Assistant response text")
     conversation_id: str = Field(..., description="Conversation ID (use in subsequent turns)")
     tools_used: list[str] = Field(default_factory=list, description="Tool names called this turn")
+    citations: list[CitationOut] = Field(
+        default_factory=list,
+        description="Citations from rag_search calls this turn, deduplicated by chunk_id",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +127,7 @@ async def chat(
         message_length=len(body.message),
     )
 
-    response_text, tools_used = await chatbot_service.chat(
+    response_text, tools_used, citations = await chatbot_service.chat(
         user_message=body.message,
         conversation_id=conversation_id,
         user_id=current_user.id,
@@ -103,10 +136,13 @@ async def chat(
         rag_service=rag_service,
         db_session=db,
         top_k_memories=settings.long_term_memory_top_k,
+        rag_source_types=body.rag_source_types,
+        rag_min_confidence=body.rag_min_confidence,
     )
 
     return ChatResponse(
         response=response_text,
         conversation_id=conversation_id,
         tools_used=tools_used,
+        citations=[CitationOut(**c) for c in citations],
     )
