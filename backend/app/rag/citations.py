@@ -122,7 +122,8 @@ def build_citations(
 
 
 def _get_score(c: Any) -> float:
-    return float(getattr(c, "rerank_score", None) or getattr(c, "score", 0.0))
+    raw: Any = getattr(c, "rerank_score", None) or getattr(c, "score", 0.0)
+    return float(raw)
 
 
 def _get_source(c: Any) -> str:

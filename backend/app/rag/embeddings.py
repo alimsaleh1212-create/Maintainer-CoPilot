@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Any
 
 import httpx
 import structlog
@@ -72,9 +73,10 @@ class EmbeddingModel:
                 json={"model": self.model_name, "input": safe_texts},
             )
             resp.raise_for_status()
-            data = resp.json()
+            data: dict[str, Any] = resp.json()
             # Response: {"model": ..., "embeddings": [[float, ...]]}
-            return data["embeddings"]
+            embeddings: list[list[float]] = data["embeddings"]
+            return embeddings
         except Exception as e:
             logger.error(
                 "embeddings.embed_batch_failed",
