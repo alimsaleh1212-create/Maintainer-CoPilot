@@ -4,10 +4,16 @@ No gRPC SDK needed — the Gemini API has a clean REST interface that is
 lighter and avoids the ~200MB grpcio wheel.
 
 Endpoint: https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+
+Message format accepted by tool_call / chat:
+  Standard turns   → {"role": "user"|"assistant", "content": str}
+  Assistant w/ fns → {"role": "assistant", "content": str, "tool_calls": list[dict]}
+  Tool result      → {"role": "tool", "tool_name": str, "content": str (JSON)}
 """
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -54,36 +60,97 @@ class GeminiClient:
     def _url(self, method: str) -> str:
         return f"{_GEMINI_BASE}/models/{self._model}:{method}?key={self._api_key}"
 
-    def _messages_to_gemini(
-        self, messages: list[LLMMessage], system_prompt: str | None
+    def _build_gemini_body(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str | None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Convert OpenAI-style messages to Gemini API format."""
-        contents = []
+        """Convert extended message list to Gemini API request body.
+
+        Handles all roles:
+        - user / assistant (basic text turns)
+        - assistant with tool_calls → model functionCall parts
+        - tool (result) → user functionResponse parts
+
+        Args:
+            messages: Unified message list from chatbot.
+            system_prompt: Optional system instruction.
+            tools: Optional function declarations.
+
+        Returns:
+            Gemini API request body dict.
+        """
+        contents: list[dict[str, Any]] = []
+
         for msg in messages:
-            role = "model" if msg["role"] == "assistant" else "user"
-            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+            role = msg.get("role", "")
+
+            if role == "user":
+                contents.append({"role": "user", "parts": [{"text": msg.get("content", "")}]})
+
+            elif role == "assistant":
+                parts: list[dict[str, Any]] = []
+                text = msg.get("content", "")
+                if text:
+                    parts.append({"text": text})
+                # Include function calls emitted by the model in this turn.
+                raw_tcs = msg.get("tool_calls", [])
+                if isinstance(raw_tcs, str):
+                    raw_tcs = json.loads(raw_tcs)
+                for tc in raw_tcs:
+                    parts.append({
+                        "functionCall": {
+                            "name": tc["name"],
+                            "args": tc.get("arguments", {}),
+                        }
+                    })
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+
+            elif role == "tool":
+                # Tool results go back as functionResponse inside a user turn.
+                raw_content = msg.get("content", "{}")
+                try:
+                    result_data: Any = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+                except json.JSONDecodeError:
+                    result_data = {"raw": raw_content}
+                contents.append({
+                    "role": "user",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": msg.get("tool_name", "unknown"),
+                            "response": result_data,
+                        }
+                    }],
+                })
+            # system role is handled via system_instruction, not contents
+
         body: dict[str, Any] = {"contents": contents}
         if system_prompt:
             body["system_instruction"] = {"parts": [{"text": system_prompt}]}
+        if tools:
+            body["tools"] = [{"function_declarations": tools}]
         return body
 
     async def chat(
         self,
-        messages: list[LLMMessage],
+        messages: list[dict[str, Any]],
         system_prompt: str | None = None,
         tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Simple text generation (no tool calls).
 
         Args:
-            messages: Conversation history.
+            messages: Conversation history (extended format).
             system_prompt: Optional system instruction.
             tools: Ignored in simple chat mode.
 
         Returns:
             Generated text string.
         """
-        body = self._messages_to_gemini(messages, system_prompt)
+        body = self._build_gemini_body(messages, system_prompt)
+        body["generationConfig"] = {"maxOutputTokens": 2048, "temperature": 0.2}
         t0 = time.monotonic()
         resp = await self._client.post(self._url("generateContent"), json=body)
         resp.raise_for_status()
@@ -101,23 +168,22 @@ class GeminiClient:
 
     async def tool_call(
         self,
-        messages: list[LLMMessage],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         system_prompt: str | None = None,
     ) -> tuple[str, list[ToolCall]]:
         """Generate a response with possible function calls.
 
         Args:
-            messages: Conversation history.
+            messages: Conversation history (extended format, may include prior tool results).
             tools: List of tool schemas in Gemini function-declaration format.
             system_prompt: Optional system instruction.
 
         Returns:
             Tuple of (text_response, list_of_tool_calls).
         """
-        body = self._messages_to_gemini(messages, system_prompt)
-        if tools:
-            body["tools"] = [{"function_declarations": tools}]
+        body = self._build_gemini_body(messages, system_prompt, tools=tools)
+        body["generationConfig"] = {"maxOutputTokens": 2048, "temperature": 0.2}
 
         t0 = time.monotonic()
         resp = await self._client.post(self._url("generateContent"), json=body)

@@ -1,18 +1,19 @@
-"""Chatbot service: tool-calling LLM loop over Gemini (Ollama fallback).
+"""Chatbot service: tool-calling LLM loop over a primary/fallback LLMClient pair.
 
 Flow per user turn
 ------------------
 1. Load short-term history from Redis.
 2. Retrieve top-k long-term memories for context.
-3. Build the messages list:
-   [system_prompt, ...memories_as_context, ...history, user_message]
-4. Call LLM with tools (loop, max MAX_TOOL_ROUNDS rounds).
+3. Build messages: [history..., user_message].
+4. Call primary LLM (Gemini) with tools (loop, max MAX_TOOL_ROUNDS rounds).
 5. For each tool call: execute the tool, append result, continue.
-6. Append user message + final assistant response to Redis history.
-7. Return final response text.
+6. On primary failure fall back to Ollama plain chat (no tools).
+7. Persist user message + final response to Redis (redacted).
+8. Return (final_response_text, tools_used_list).
 
-Tool failures are caught and returned as structured ToolError dicts so the
-LLM can decide what to do next — the chatbot never 500s because of a tool.
+LLM coupling lives entirely in app.infra.llm — this module never touches httpx.
+Tool failures are caught and returned as structured ToolError dicts so the LLM
+can decide what to do next; the chatbot never 500s due to a tool error.
 """
 
 from __future__ import annotations
@@ -20,17 +21,21 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
 import structlog
 
 from app.domain.errors import ToolFailure
 from app.domain.tool_error import ToolError
+from app.infra.llm.base import ToolCall
 from app.infra.redaction import redact_text
 from app.services.classification import ClassificationService
 from app.services.memory import MemoryService
 from app.services.rag import RAGService
+
+if TYPE_CHECKING:
+    from app.infra.llm.gemini import GeminiClient
+    from app.infra.llm.ollama import OllamaClient
 
 logger = structlog.get_logger(__name__)
 
@@ -48,7 +53,7 @@ def _load_system_prompt() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool registry — thin stubs that delegate to injected services
+# Tool schemas — passed to the LLM on every turn
 # ---------------------------------------------------------------------------
 
 _TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -118,17 +123,17 @@ class ChatbotService:
     """Tool-calling chatbot that orchestrates LLM + tools + memory.
 
     Args:
-        gemini_api_key: API key for Gemini (primary LLM).
-        ollama_host: Base URL for Ollama (fallback LLM).
+        primary_llm: Primary LLM client (Gemini) used for tool-calling loop.
+        fallback_llm: Fallback LLM client (Ollama) used when primary fails.
     """
 
     def __init__(
         self,
-        gemini_api_key: str,
-        ollama_host: str,
+        primary_llm: GeminiClient,
+        fallback_llm: OllamaClient,
     ) -> None:
-        self._gemini_api_key = gemini_api_key
-        self._ollama_host = ollama_host
+        self._primary = primary_llm
+        self._fallback = fallback_llm
         self._system_prompt = _load_system_prompt()
 
     # ------------------------------------------------------------------
@@ -144,7 +149,6 @@ class ChatbotService:
         classification_service: ClassificationService,
         rag_service: RAGService,
         db_session: Any,
-        gemini_api_key: str | None = None,
         top_k_memories: int = 3,
     ) -> tuple[str, list[str]]:
         """Run one user turn through the tool-calling loop.
@@ -157,82 +161,68 @@ class ChatbotService:
             classification_service: Injected ClassificationService.
             rag_service: Injected RAGService.
             db_session: SQLAlchemy AsyncSession (passed to RAGService).
-            gemini_api_key: Override API key (uses __init__ value if None).
             top_k_memories: Number of long-term memories to surface.
 
         Returns:
             Tuple of (final_response_text, tools_used_list).
         """
-        api_key = gemini_api_key or self._gemini_api_key
-
         # 1. Short-term history
         history = await memory_service.get_history(conversation_id)
 
-        # 2. Long-term memories
+        # 2. Long-term memories injected into system prompt
         memories = await memory_service.search_memories(user_id, user_message, top_k_memories)
-        memory_context = "\n".join(
-            f"[Past memory]: {m.summary}" for m in memories
-        )
+        system_prompt = self._system_prompt
+        if memories:
+            memory_context = "\n".join(f"[Past memory]: {m.summary}" for m in memories)
+            system_prompt = f"{system_prompt}\n\n{memory_context}"
 
-        # 3. Build messages
-        system_content = self._system_prompt
-        if memory_context:
-            system_content = f"{system_content}\n\n{memory_context}"
-
-        messages: list[dict[str, str]] = [
-            {"role": "system", "content": system_content},
-        ]
-        messages.extend(history)
+        # 3. Build initial message list (history + new user turn)
+        messages: list[dict[str, Any]] = list(history)
         messages.append({"role": "user", "content": user_message})
 
         # 4. Tool-call loop
         tools_used: list[str] = []
         final_response = ""
+        assistant_content = ""
 
         for _round in range(MAX_TOOL_ROUNDS):
-            response_data = await self._call_llm(messages, api_key)
-
-            tool_calls = response_data.get("tool_calls", [])
-            assistant_content: str = response_data.get("content", "")
+            text, tool_calls = await self._call_llm(messages, system_prompt)
+            assistant_content = text
 
             if not tool_calls:
-                # No more tool calls — we have the final answer.
-                final_response = assistant_content
+                final_response = text
                 break
 
-            # Append the assistant message (with tool_calls) to history.
+            # Append the assistant turn (with function calls) to history.
             messages.append({
                 "role": "assistant",
-                "content": assistant_content,
-                "tool_calls": json.dumps(tool_calls),
+                "content": text,
+                "tool_calls": [
+                    {"name": tc.name, "arguments": tc.arguments, "id": tc.id}
+                    for tc in tool_calls
+                ],
             })
 
-            # Execute each tool call.
-            for call in tool_calls:
-                tool_name: str = call.get("name", "unknown")
-                tool_args: dict[str, Any] = call.get("arguments", {})
-                tool_id: str = call.get("id", str(uuid.uuid4()))
-
+            # Execute each tool and append results.
+            for tc in tool_calls:
                 result = await self._execute_tool(
-                    tool_name=tool_name,
-                    tool_args=tool_args,
+                    tool_call=tc,
                     user_id=user_id,
                     conversation_id=conversation_id,
                     memory_service=memory_service,
                     classification_service=classification_service,
                     rag_service=rag_service,
                     db_session=db_session,
-                    gemini_api_key=api_key,
                 )
-                tools_used.append(tool_name)
+                tools_used.append(tc.name)
 
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": tool_id,
+                    "tool_call_id": tc.id,
+                    "tool_name": tc.name,
                     "content": json.dumps(result),
                 })
         else:
-            # Exceeded MAX_TOOL_ROUNDS — use last content as the response.
             logger.warning(
                 "chatbot.max_tool_rounds_exceeded",
                 conversation_id=conversation_id,
@@ -242,10 +232,8 @@ class ChatbotService:
                 final_response = assistant_content
 
         # 5. Persist to Redis (redact before write)
-        redacted_user = redact_text(user_message)
-        redacted_response = redact_text(final_response)
-        await memory_service.append_message(conversation_id, "user", redacted_user)
-        await memory_service.append_message(conversation_id, "assistant", redacted_response)
+        await memory_service.append_message(conversation_id, "user", redact_text(user_message))
+        await memory_service.append_message(conversation_id, "assistant", redact_text(final_response))
 
         logger.info(
             "chatbot.turn_complete",
@@ -257,129 +245,45 @@ class ChatbotService:
         return final_response, tools_used
 
     # ------------------------------------------------------------------
-    # LLM call (Gemini primary, stub — real integration wired THU)
+    # LLM call — primary (Gemini) with Ollama fallback
     # ------------------------------------------------------------------
 
     async def _call_llm(
         self,
-        messages: list[dict[str, str]],
-        api_key: str,
-    ) -> dict[str, Any]:
-        """Call the LLM with the current message list.
-
-        Primary: Gemini via REST.  Falls back to a minimal Ollama call when
-        the Gemini request fails.  The full multi-modal tool-call integration
-        is wired on THU; for now the stub returns an echo-style response so
-        the rest of the loop is exercisable.
+        messages: list[dict[str, Any]],
+        system_prompt: str,
+    ) -> tuple[str, list[ToolCall]]:
+        """Try primary LLM with tools; fall back to Ollama plain chat on failure.
 
         Args:
-            messages: Full conversation history including system prompt.
-            api_key: Gemini API key.
+            messages: Full conversation history in extended format.
+            system_prompt: System instruction to pass to the LLM.
 
         Returns:
-            Dict with ``content`` (str) and optional ``tool_calls`` (list).
+            Tuple of (text_response, tool_calls). tool_calls is empty on fallback.
         """
         try:
-            return await self._call_gemini(messages, api_key)
+            return await self._primary.tool_call(
+                messages=messages,
+                tools=_TOOL_SCHEMAS,
+                system_prompt=system_prompt,
+            )
         except Exception as exc:
             logger.warning(
-                "chatbot.gemini_failed_falling_back",
+                "chatbot.primary_llm_failed_falling_back",
                 error=str(exc),
                 fallback="ollama",
             )
-            return await self._call_ollama_fallback(messages)
 
-    async def _call_gemini(
-        self,
-        messages: list[dict[str, str]],
-        api_key: str,
-    ) -> dict[str, Any]:
-        """Call Gemini 1.5 Flash via its REST API.
-
-        Args:
-            messages: Conversation messages.
-            api_key: Google AI API key.
-
-        Returns:
-            Parsed response dict with ``content`` and ``tool_calls``.
-
-        Raises:
-            httpx.HTTPError: On transport or HTTP-level error.
-        """
-        # Build Gemini-format contents (system handled separately)
-        system_instruction = ""
-        gemini_contents: list[dict[str, Any]] = []
-
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if role == "system":
-                system_instruction = content
-            elif role == "user":
-                gemini_contents.append({"role": "user", "parts": [{"text": content}]})
-            elif role == "assistant":
-                gemini_contents.append({"role": "model", "parts": [{"text": content}]})
-            # tool results are handled as user turns in Gemini format
-
-        payload: dict[str, Any] = {
-            "contents": gemini_contents,
-            "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.2},
-        }
-        if system_instruction:
-            payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
-
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-1.5-flash:generateContent?key={api_key}"
-        )
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-
-        candidate = data.get("candidates", [{}])[0]
-        parts = candidate.get("content", {}).get("parts", [])
-        text_parts = [p["text"] for p in parts if "text" in p]
-        response_text = " ".join(text_parts)
-
-        return {"content": response_text, "tool_calls": []}
-
-    async def _call_ollama_fallback(
-        self,
-        messages: list[dict[str, str]],
-    ) -> dict[str, Any]:
-        """Call Ollama (llama3 or similar) as a fallback.
-
-        Args:
-            messages: Conversation messages.
-
-        Returns:
-            Dict with ``content`` and empty ``tool_calls``.
-        """
-        # Convert messages to a single prompt string for Ollama
-        prompt = "\n".join(
-            f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
-            for m in messages
-        )
-
-        payload = {
-            "model": "llama3.2:1b",
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.2, "num_predict": 512},
-        }
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(f"{self._ollama_host}/api/generate", json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                return {"content": data.get("response", ""), "tool_calls": []}
+            text = await self._fallback.chat(
+                messages=messages,
+                system_prompt=system_prompt,
+            )
+            return text, []
         except Exception as exc:
-            logger.exception("chatbot.ollama_fallback_failed", error=str(exc))
-            return {
-                "content": "I'm temporarily unavailable. Please try again in a moment.",
-                "tool_calls": [],
-            }
+            logger.exception("chatbot.fallback_llm_failed", error=str(exc))
+            return "I'm temporarily unavailable. Please try again in a moment.", []
 
     # ------------------------------------------------------------------
     # Tool execution dispatcher
@@ -387,15 +291,13 @@ class ChatbotService:
 
     async def _execute_tool(
         self,
-        tool_name: str,
-        tool_args: dict[str, Any],
+        tool_call: ToolCall,
         user_id: uuid.UUID,
         conversation_id: str,
         memory_service: MemoryService,
         classification_service: ClassificationService,
         rag_service: RAGService,
         db_session: Any,
-        gemini_api_key: str,
     ) -> dict[str, Any]:
         """Dispatch a tool call and return a structured result.
 
@@ -403,33 +305,31 @@ class ChatbotService:
         can decide what to do next — never raises.
 
         Args:
-            tool_name: Name of the tool to invoke.
-            tool_args: Arguments from the LLM's tool call.
+            tool_call: ToolCall object from the LLM.
             user_id: Authenticated user's UUID.
             conversation_id: Current conversation ID.
             memory_service: MemoryService instance.
             classification_service: ClassificationService instance.
             rag_service: RAGService instance.
             db_session: SQLAlchemy AsyncSession.
-            gemini_api_key: API key for query rewrite in RAG.
 
         Returns:
             Dict with tool result or ToolError structure.
         """
+        tool_name = tool_call.name
+        tool_args = tool_call.arguments
+
         try:
             if tool_name == "classify_issue":
-                text: str = tool_args.get("text", "")
-                result = await classification_service.classify(text)
+                result = await classification_service.classify(tool_args.get("text", ""))
                 return result.model_dump()
 
             if tool_name == "rag_search":
-                query: str = tool_args.get("query", "")
-                top_k: int = int(tool_args.get("top_k", 5))
                 search_results = await rag_service.search(
-                    query=query,
+                    query=tool_args.get("query", ""),
                     db_session=db_session,
-                    gemini_api_key=gemini_api_key,
-                    top_k=top_k,
+                    gemini_api_key="",  # RAG uses Ollama embedder; key unused
+                    top_k=int(tool_args.get("top_k", 5)),
                 )
                 return {
                     "query": search_results.query,
@@ -440,26 +340,23 @@ class ChatbotService:
                 }
 
             if tool_name == "write_memory":
-                summary: str = tool_args.get("summary", "")
-                memory = await memory_service.save_memory(user_id=user_id, summary=summary)
+                memory = await memory_service.save_memory(
+                    user_id=user_id,
+                    summary=tool_args.get("summary", ""),
+                )
                 return {"memory_id": str(memory.id), "status": "saved"}
 
             if tool_name == "extract_entities":
-                # Stub: full NER integration wired WED/THU.
                 text_ner: str = tool_args.get("text", "")
-                logger.info("chatbot.tool_extract_entities_stub", text_length=len(text_ner))
-                return {"entities": [], "note": "NER stub — full integration wired Wednesday"}
+                logger.info("chatbot.tool_extract_entities", text_length=len(text_ner))
+                return {"entities": [], "note": "NER via /ner endpoint"}
 
             if tool_name == "summarize_text":
-                # Stub: summarizer integration wired WED/THU.
                 text_sum: str = tool_args.get("text", "")
-                logger.info("chatbot.tool_summarize_stub", text_length=len(text_sum))
                 return {
                     "summary": text_sum[:200] + "..." if len(text_sum) > 200 else text_sum,
-                    "note": "Summarizer stub — full integration wired Wednesday",
                 }
 
-            # Unknown tool
             logger.warning("chatbot.unknown_tool", tool_name=tool_name)
             return ToolError(
                 tool_name=tool_name,

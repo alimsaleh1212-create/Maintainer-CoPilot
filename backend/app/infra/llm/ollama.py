@@ -16,6 +16,7 @@ Rules (CLAUDE.md):
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,9 +28,9 @@ from app.infra.llm.base import LLMMessage, ToolCall
 
 logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
-_DEFAULT_MODEL = "llama3.1:8b-instruct"
-_DEFAULT_EMBED_MODEL = "bge-small-en-v1.5"
-_DEFAULT_TIMEOUT_S = 10.0
+_DEFAULT_MODEL = "gemma3:4b"
+_DEFAULT_EMBED_MODEL = "nomic-embed-text"
+_DEFAULT_TIMEOUT_S = 60.0
 
 
 @dataclass
@@ -124,16 +125,71 @@ class OllamaClient:
     # LLMClient protocol implementation
     # ------------------------------------------------------------------
 
+    def _to_ollama_messages(
+        self,
+        messages: list[dict[str, Any]],
+        system_prompt: str = "",
+    ) -> list[dict[str, Any]]:
+        """Convert extended chatbot message format to Ollama /api/chat format.
+
+        Handles all roles:
+        - user/assistant: basic text turns
+        - assistant with tool_calls: OpenAI-compatible function calls
+        - tool (result): role="tool" with tool_call_id
+
+        Args:
+            messages: Extended message list from chatbot.
+            system_prompt: Optional system message prepended to the list.
+
+        Returns:
+            Ollama-compatible message list.
+        """
+        result: list[dict[str, Any]] = []
+        if system_prompt:
+            result.append({"role": "system", "content": system_prompt})
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role in ("user", "system"):
+                result.append({"role": role, "content": content})
+
+            elif role == "assistant":
+                entry: dict[str, Any] = {"role": "assistant", "content": content}
+                raw_tcs = msg.get("tool_calls", [])
+                if isinstance(raw_tcs, str):
+                    raw_tcs = json.loads(raw_tcs)
+                if raw_tcs:
+                    entry["tool_calls"] = [
+                        {
+                            "id": tc.get("id", ""),
+                            "type": "function",
+                            "function": {"name": tc["name"], "arguments": tc.get("arguments", {})},
+                        }
+                        for tc in raw_tcs
+                    ]
+                result.append(entry)
+
+            elif role == "tool":
+                result.append({
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                    "content": content,
+                })
+
+        return result
+
     async def chat(
         self,
-        messages: list[LLMMessage],
+        messages: list[dict[str, Any]],
         system_prompt: str = "",
         tools: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate a plain-text reply via Ollama's /api/chat endpoint.
 
         Args:
-            messages: Conversation history (user + assistant turns).
+            messages: Conversation history (extended format).
             system_prompt: Optional system message prepended to the history.
             tools: Not used by the basic chat path; silently ignored.
 
@@ -143,10 +199,7 @@ class OllamaClient:
         Raises:
             ToolFailure: if Ollama is unreachable or returns an error.
         """
-        ollama_messages: list[dict[str, str]] = []
-        if system_prompt:
-            ollama_messages.append({"role": "system", "content": system_prompt})
-        ollama_messages.extend({"role": m["role"], "content": m["content"]} for m in messages)
+        ollama_messages = self._to_ollama_messages(messages, system_prompt)
 
         body: dict[str, Any] = {
             "model": self.model,
@@ -170,8 +223,9 @@ class OllamaClient:
 
     async def tool_call(
         self,
-        messages: list[LLMMessage],
+        messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        system_prompt: str = "",
     ) -> tuple[str, list[ToolCall]]:
         """Submit messages to Ollama with tool/function-calling enabled.
 
@@ -179,8 +233,9 @@ class OllamaClient:
         ``tools`` field in ``/api/chat``.
 
         Args:
-            messages: Conversation history.
+            messages: Conversation history (extended format).
             tools: OpenAI-compatible tool schemas.
+            system_prompt: Optional system message.
 
         Returns:
             A 2-tuple of (text_content, list_of_tool_calls).
@@ -188,9 +243,7 @@ class OllamaClient:
         Raises:
             ToolFailure: if Ollama is unreachable or returns an error.
         """
-        ollama_messages: list[dict[str, str]] = [
-            {"role": m["role"], "content": m["content"]} for m in messages
-        ]
+        ollama_messages = self._to_ollama_messages(messages, system_prompt)
 
         body: dict[str, Any] = {
             "model": self.model,
@@ -248,7 +301,7 @@ class OllamaClient:
         """
         body: dict[str, Any] = {
             "model": self.embed_model,
-            "input": text,
+            "input": [text],
         }
 
         own = self.http_client is None

@@ -50,6 +50,11 @@ class Settings(BaseModel):
     log_level: str = Field(default="INFO")
     environment: str = Field(default="development")
 
+    # --- LLM model names (non-secret; override via env vars) -----------------
+    gemini_model: str = Field(default="gemini-2.0-flash")
+    ollama_chat_model: str = Field(default="gemma3:4b")
+    ollama_embed_model: str = Field(default="nomic-embed-text")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -82,4 +87,8 @@ def get_settings() -> Settings:
         minio_secret_key=s["minio_secret_key"],
         langfuse_public_key=s["langfuse_public_key"],
         langfuse_secret_key=s["langfuse_secret_key"],
+        # Model names live in Vault so they can be changed without rebuild.
+        gemini_model=s["gemini_model"],
+        ollama_chat_model=s["ollama_chat_model"],
+        ollama_embed_model=s["ollama_embed_model"],
     )

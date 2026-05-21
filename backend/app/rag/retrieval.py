@@ -7,10 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import structlog
-from sqlalchemy import func, literal_column, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models import RagChunk
 
 logger = structlog.get_logger(__name__)
 
@@ -152,17 +150,21 @@ class HybridRetriever:
         # Embed query
         query_embedding = await embedding_fn(query)
 
-        # Query pgvector: find nearest neighbors by cosine distance
+        # Query pgvector: find nearest neighbors by cosine distance.
+        # Use CAST(...AS vector) not ::vector — the :: shorthand confuses
+        # SQLAlchemy's text() parameter parser when directly adjacent to the
+        # parameter placeholder (e.g. :name::type is mis-tokenised).
+        embedding_str = str(query_embedding)
         stmt = (
             text(
                 "SELECT id, chunk_id, text, source, "
-                "       1 - (embedding <=> :query_embedding::vector) as score "
+                "       1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
                 "FROM rag_chunks "
-                "ORDER BY embedding <=> :query_embedding::vector "
+                "ORDER BY embedding <=> CAST(:query_embedding AS vector) "
                 "LIMIT :top_k"
             )
             .bindparams(
-                query_embedding=str(query_embedding),  # pgvector expects string format
+                query_embedding=embedding_str,
                 top_k=top_k,
             )
         )

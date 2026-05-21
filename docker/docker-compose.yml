@@ -115,28 +115,16 @@ services:
     image: hashicorp/vault:latest
     cap_add:
       - IPC_LOCK
-    entrypoint: /bin/sh
-    command:
-      - -c
-      - |
-        echo "Waiting for Vault to be healthy..."
-        while ! vault status -address=http://vault:8200 >/dev/null 2>&1; do
-          sleep 1
-        done
-        echo "Vault is ready. Seeding secrets..."
-        vault kv put -address=http://vault:8200 secret/copilot \
-          gemini_api_key="dev-gemini-key-placeholder" \
-          ollama_host="http://ollama:11434" \
-          jwt_signing_key="dev-jwt-signing-key-change-in-production-$(date +%s)" \
-          database_url="postgresql+asyncpg://copilot:copilot@db:5432/copilot" \
-          minio_access_key="minioadmin" \
-          minio_secret_key="minioadmin" \
-          langfuse_public_key="dev-langfuse-public-key" \
-          langfuse_secret_key="dev-langfuse-secret-key"
-        echo "✓ Secrets seeded successfully"
+    # Mount the project-root .env (read-only) and the seeding script into
+    # the container. The script reads .env directly, so this is independent
+    # of which directory `docker compose` is invoked from.
+    volumes:
+      - ../.env:/secrets/.env:ro
+      - ./vault-init.sh:/usr/local/bin/vault-init.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/vault-init.sh"]
     environment:
       VAULT_ADDR: http://vault:8200
-      VAULT_TOKEN: "${VAULT_ROOT_TOKEN}"
+      VAULT_TOKEN: "${VAULT_ROOT_TOKEN:-dev-token-local}"
     depends_on:
       vault:
         condition: service_healthy

@@ -16,6 +16,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.infra.llm.base import LLMClient
 from app.services.chatbot import ChatbotService
 from app.services.classification import ClassificationService
 from app.services.memory import MemoryService
@@ -117,19 +118,34 @@ def get_rag_service(request: Request) -> RAGService:  # noqa: ARG001
     return RAGService()
 
 
-def get_chatbot_service(request: Request) -> ChatbotService:
-    """Return a ChatbotService initialised with LLM credentials from Vault.
+def get_primary_llm(request: Request) -> LLMClient:
+    """Return the primary LLM client (Gemini) from app.state.
+
+    Used by routes that need direct LLM access without going through the
+    full chatbot/tool-calling pipeline (e.g. /summarize).
 
     Args:
-        request: FastAPI request (used to access app.state.settings).
+        request: FastAPI request (used to access app.state).
+
+    Returns:
+        Primary LLMClient (currently GeminiClient).
+    """
+    client: LLMClient = request.app.state.gemini_client
+    return client
+
+
+def get_chatbot_service(request: Request) -> ChatbotService:
+    """Return a ChatbotService with injected primary (Gemini) + fallback (Ollama) clients.
+
+    Args:
+        request: FastAPI request (used to access app.state singletons).
 
     Returns:
         ChatbotService instance.
     """
-    settings: Settings = request.app.state.settings
     return ChatbotService(
-        gemini_api_key=settings.gemini_api_key,
-        ollama_host=settings.ollama_host,
+        primary_llm=request.app.state.gemini_client,
+        fallback_llm=request.app.state.ollama_client,
     )
 
 
@@ -145,3 +161,4 @@ MemoryServiceDep = Annotated[MemoryService, Depends(get_memory_service)]
 WidgetServiceDep = Annotated[WidgetService, Depends(get_widget_service)]
 RAGServiceDep = Annotated[RAGService, Depends(get_rag_service)]
 ChatbotServiceDep = Annotated[ChatbotService, Depends(get_chatbot_service)]
+PrimaryLLMDep = Annotated[LLMClient, Depends(get_primary_llm)]
