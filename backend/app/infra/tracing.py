@@ -35,9 +35,19 @@ logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 try:
     from langfuse import Langfuse  # type: ignore[import-untyped]
-    from langfuse.api.resources.commons.errors.unauthorized_error import (  # type: ignore[import-untyped]
-        UnauthorizedError,
-    )
+
+    # UnauthorizedError path moved between langfuse v2/v3 and v4. Try a
+    # couple of known locations, then fall back to base Exception.
+    # Use broad except to handle both ImportError and ModuleNotFoundError.
+    try:
+        from langfuse.api.resources.commons.errors.unauthorized_error import (  # type: ignore[import-untyped]
+            UnauthorizedError,
+        )
+    except (ImportError, ModuleNotFoundError):
+        try:
+            from langfuse.api import UnauthorizedError  # type: ignore[import-untyped]
+        except (ImportError, ModuleNotFoundError):
+            UnauthorizedError = Exception  # type: ignore[assignment,misc]
 
     _LANGFUSE_AVAILABLE = True
 except ModuleNotFoundError:
@@ -46,13 +56,16 @@ except ModuleNotFoundError:
     _LANGFUSE_AVAILABLE = False
 
 # Sentinel values that indicate Langfuse is not configured.
-_PLACEHOLDER_PREFIXES = ("placeholder", "your-", "changeme", "")
+# Note: do NOT include "" here — startswith("") matches every string.
+_PLACEHOLDER_PREFIXES = ("placeholder", "your-", "changeme", "dev-langfuse")
 
 
 def _is_placeholder(value: str) -> bool:
     """Return True if *value* looks like an unconfigured placeholder."""
     lower = value.lower().strip()
-    return any(lower.startswith(p) for p in _PLACEHOLDER_PREFIXES) or len(lower) < 6
+    if not lower or len(lower) < 6:
+        return True
+    return any(lower.startswith(p) for p in _PLACEHOLDER_PREFIXES)
 
 
 class _NoOpTrace:
