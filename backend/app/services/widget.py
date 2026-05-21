@@ -193,6 +193,24 @@ class WidgetService:
         )
         return widget
 
+    async def first_enabled_widget(self) -> Widget | None:
+        """Return the most recently created enabled widget across all owners.
+
+        Used by the public ``GET /widgets/discover`` demo endpoint so the demo
+        host never needs a hardcoded widget ID.
+
+        Returns:
+            Most recent enabled Widget, or None if no widgets exist.
+        """
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(Widget)
+                .where(Widget.enabled == True)  # noqa: E712
+                .order_by(Widget.created_at.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
+
     async def list_widgets(self, owner_id: uuid.UUID) -> list[Widget]:
         """Return all widgets owned by a user, newest first.
 

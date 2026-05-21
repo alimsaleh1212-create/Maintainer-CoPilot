@@ -132,6 +132,34 @@ async def list_widgets(
     return [WidgetResponse.model_validate(w) for w in widgets]
 
 
+class WidgetDiscoverResponse(BaseModel):
+    """Minimal public widget info for the demo host discovery call."""
+
+    public_widget_id: str | None = None
+
+
+@router.get("/discover", response_model=WidgetDiscoverResponse)
+async def discover_widget(
+    widget_service: WidgetServiceDep,
+) -> WidgetDiscoverResponse:
+    """Return the most recent enabled widget ID (public, no auth).
+
+    Called by the demo host pages at load time to dynamically inject the
+    correct widget ID without hardcoding it in HTML.  Returns
+    ``{public_widget_id: null}`` when no widget exists yet.
+
+    Args:
+        widget_service: Widget CRUD service.
+
+    Returns:
+        WidgetDiscoverResponse with the first enabled widget's public ID.
+    """
+    widget = await widget_service.first_enabled_widget()
+    return WidgetDiscoverResponse(
+        public_widget_id=widget.public_widget_id if widget else None
+    )
+
+
 @router.get("/{widget_id}/config", response_model=WidgetConfigResponse)
 async def get_widget_config(
     widget_id: str,
