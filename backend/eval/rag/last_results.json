@@ -1,0 +1,15 @@
+{
+  "metrics": {
+    "hit_at_5": 0.48,
+    "mrr_at_10": 0.336,
+    "faithfulness": 0.6447864936995371,
+    "answer_relevancy": NaN
+  },
+  "thresholds": {
+    "faithfulness": 0.8,
+    "answer_relevancy": 0.75,
+    "hit_at_5": 0.7,
+    "rationale": "Thresholds chosen for MONAI docs + issue retrieval use case.\nFaithfulness: Medical docs are precise; 0.80 ensures grounding.\nAnswer relevancy: MONAI questions are technical; 0.75 = high semantic match.\nHit@5: With multi-query + hybrid retrieval, 70% Hit@5 on golden set is realistic.\nAblation results (2026-05-21): all 4 configs achieved 80% Hit@5 on 10-probe set,\nconfirming the 70% threshold is achievable and the corpus has sufficient signal.\n"
+  },
+  "n_questions": 25
+}

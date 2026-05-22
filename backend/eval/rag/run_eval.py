@@ -222,7 +222,7 @@ def run_ragas(
     Returns:
         Dict with 'faithfulness' and 'answer_relevancy' scores.
     """
-    from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+    from langchain_openai import ChatOpenAI
     from ragas import evaluate
     from ragas.dataset_schema import EvaluationDataset, SingleTurnSample
     from ragas.llms import LangchainLLMWrapper
@@ -244,13 +244,16 @@ def run_ragas(
             max_tokens=8192,
         )
     )
-    embeddings = LangchainEmbeddingsWrapper(
-        OpenAIEmbeddings(
-            model="text-embedding-004",
-            api_key=gemini_api_key,  # type: ignore[arg-type]
-            base_url=gemini_base_url,
-        )
-    )
+
+    # Gemini's OpenAI-compat endpoint does NOT support embeddings (501 UNIMPLEMENTED).
+    # Use Ollama's nomic-embed-text instead — same model used by the live RAG pipeline.
+    try:
+        from langchain_ollama import OllamaEmbeddings as _OllamaEmbeddings
+        _embed_backend = _OllamaEmbeddings(model="nomic-embed-text", base_url="http://localhost:11434")
+    except ImportError:
+        from langchain_community.embeddings import OllamaEmbeddings as _OllamaEmbeddings  # type: ignore[no-redef]
+        _embed_backend = _OllamaEmbeddings(model="nomic-embed-text", base_url="http://localhost:11434")  # type: ignore[assignment]
+    embeddings = LangchainEmbeddingsWrapper(_embed_backend)
 
     samples = [
         SingleTurnSample(
