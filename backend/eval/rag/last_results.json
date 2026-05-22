@@ -2,8 +2,8 @@
   "metrics": {
     "hit_at_5": 0.48,
     "mrr_at_10": 0.336,
-    "faithfulness": 0.6447864936995371,
-    "answer_relevancy": NaN
+    "faithfulness": 0.5824240087397983,
+    "answer_relevancy": 0.5890182274370217
   },
   "thresholds": {
     "faithfulness": 0.8,
