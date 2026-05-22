@@ -86,6 +86,61 @@ else:
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Delete failed: {exc}")
 
+            # ── Edit form ────────────────────────────────────────────────
+            st.markdown(
+                '<div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:0.06em;'
+                'color:#475569;margin:0.75rem 0 0.5rem;border-top:1px solid #1e293b;'
+                'padding-top:0.75rem;">Edit widget</div>',
+                unsafe_allow_html=True,
+            )
+            with st.form(f"edit_{internal_id}", clear_on_submit=False):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    new_origins_raw = st.text_input(
+                        "Allowed origins",
+                        value=", ".join(origins),
+                        key=f"e_origins_{internal_id}",
+                        help="Comma-separated list",
+                    )
+                    new_greeting = st.text_input(
+                        "Greeting",
+                        value=w.get("greeting", ""),
+                        key=f"e_greet_{internal_id}",
+                    )
+                    new_enabled = st.checkbox(
+                        "Widget enabled",
+                        value=enabled,
+                        key=f"e_enabled_{internal_id}",
+                    )
+                with ec2:
+                    new_tools = st.multiselect(
+                        "Enabled tools",
+                        ["classify", "ner", "summarize", "rag_search", "write_memory"],
+                        default=tools,
+                        key=f"e_tools_{internal_id}",
+                        help="Tools the LLM can call during a chat session",
+                    )
+                    new_color = st.color_picker(
+                        "Primary color",
+                        value=(w.get("theme") or {}).get("primaryColor", "#22c55e"),
+                        key=f"e_color_{internal_id}",
+                    )
+                saved = st.form_submit_button("Save changes", type="primary")
+            if saved:
+                try:
+                    payload = {
+                        "allowed_origins": [o.strip() for o in new_origins_raw.split(",") if o.strip()],
+                        "greeting": new_greeting,
+                        "enabled_tools": new_tools,
+                        "theme": {"primaryColor": new_color},
+                        "enabled": new_enabled,
+                    }
+                    client.update_widget(internal_id, payload)
+                    st.success("Widget updated. Browser users must hard-refresh to pick up new config.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Update failed: {exc}")
+
 st.markdown("<div style='height:1.5rem'/>", unsafe_allow_html=True)
 
 # ── Create widget ──────────────────────────────────────────────────────────

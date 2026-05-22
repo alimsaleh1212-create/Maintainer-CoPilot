@@ -67,6 +67,16 @@ class APIClient:
         resp.raise_for_status()
         return resp.json()
 
+    def _put(self, path: str, json: Any = None) -> Any:
+        resp = httpx.put(
+            f"{self._base}{path}",
+            headers=self._headers(),
+            json=json,
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     # ------------------------------------------------------------------ auth endpoints
 
     def login(self, email: str, password: str) -> dict[str, Any]:
@@ -124,6 +134,12 @@ class APIClient:
 
     def delete_widget(self, widget_id: str) -> dict[str, Any]:
         return dict(self._delete(f"/widgets/{widget_id}"))
+
+    def update_widget(self, widget_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """PUT /widgets/{widget_id} — partial update of any of:
+        allowed_origins, greeting, theme, enabled_tools, enabled.
+        """
+        return dict(self._put(f"/widgets/{widget_id}", data))
 
     # ------------------------------------------------------------------ memory
 
