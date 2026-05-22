@@ -131,6 +131,8 @@ def _chat_answer(api_url: str, token: str, question: str, contexts: list[str]) -
         if context_block
         else question
     )
+    # /chat has maxLength=8192; truncate context so the question always fits
+    augmented_question = augmented_question[:8000]
     try:
         resp = httpx.post(
             f"{api_url}/chat",
