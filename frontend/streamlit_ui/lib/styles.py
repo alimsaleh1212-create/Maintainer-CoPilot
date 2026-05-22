@@ -17,10 +17,34 @@ html, body, [class*="css"] {
     background: #0f172a !important;
 }
 
-/* Hide default header / footer */
+/* Hide default header decoration / footer / hamburger but KEEP the sidebar
+ * collapse control visible — otherwise users who close the sidebar have no
+ * way to reopen it (the reopen arrow lives inside Streamlit's top header). */
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-header { visibility: hidden; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stToolbar"] { visibility: hidden; }
+header[data-testid="stHeader"] {
+    background: transparent !important;
+    height: 0 !important;
+}
+/* The collapse/expand arrow itself — make sure it stays clickable, sits
+ * above any custom backgrounds, and is visually obvious in dark mode. */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] {
+    visibility: visible !important;
+    display: block !important;
+    z-index: 1000 !important;
+    color: #e2e8f0 !important;
+    opacity: 0.9 !important;
+}
+[data-testid="stSidebarCollapseButton"]:hover,
+[data-testid="stSidebarCollapsedControl"]:hover,
+[data-testid="collapsedControl"]:hover {
+    color: #22c55e !important;
+    opacity: 1 !important;
+}
 
 /* ── Sidebar ──────────────────────────────────────────────── */
 [data-testid="stSidebar"] {
