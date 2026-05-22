@@ -345,24 +345,37 @@ class HybridRetriever:
         candidates: list[RetrievedChunk],
         reranker: Any,
     ) -> list[RetrievedChunk]:
-        """Rerank candidates using cross-encoder.
+        """Rerank candidates using a cross-encoder.
+
+        Calls ``reranker.rerank(query, passages)`` which returns
+        ``[(index, score), ...]`` sorted by score desc. We then attach the
+        rerank score to each chunk and resort the list. The cross-encoder
+        score replaces the hybrid score as the final ranking signal because
+        BGE-reranker is far more accurate at semantic relevance than the
+        dense+sparse linear combination.
 
         Args:
-            query: Original query
-            candidates: Chunks to rerank
-            reranker: Cross-encoder model
+            query: Original user query (not the rewritten variations).
+            candidates: Hybrid top-N to rerank.
+            reranker: Object exposing async ``rerank(query, list[str]) -> list[(int, float)]``.
 
         Returns:
-            Reranked chunks
+            Candidates resorted by cross-encoder score (descending).
         """
         if not candidates:
             return candidates
 
         logger.info("retrieval.reranking", num_candidates=len(candidates))
+        passages = [c.text for c in candidates]
+        ranked = await reranker.rerank(query, passages)
 
-        # TODO: Use BAAI/bge-reranker-base
-        # scores = reranker.rank(query, [c.text for c in candidates])
-        # Update candidates with rerank_score and resort
+        for idx, score in ranked:
+            candidates[idx].rerank_score = score
+            candidates[idx].score = score
+        candidates.sort(key=lambda c: c.rerank_score or 0.0, reverse=True)
 
-        logger.info("retrieval.reranking_placeholder")
-        return candidates  # Placeholder: return as-is
+        logger.info(
+            "retrieval.reranking_complete",
+            top_rerank_score=candidates[0].rerank_score if candidates else None,
+        )
+        return candidates

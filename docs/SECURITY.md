@@ -22,6 +22,29 @@ All patterns are compiled in `backend/app/infra/redaction.py`. `redact_text()` r
 
 ---
 
+## Secrets flow (Vault is the only runtime source)
+
+```
+.env  →  vault-init container  →  HashiCorp Vault (KV v2 at secret/copilot)
+                                         │
+                                         ▼
+                              backend/app/infra/vault.py
+                                         │
+                                         ▼
+                              backend/app/config.py::Settings
+                                         │
+                                         ▼
+                              app code via Depends(get_settings)
+```
+
+**Hard rule:** No `os.getenv` lives outside `backend/app/config.py` and `backend/app/infra/vault.py`. Verified by grep at commit time.
+
+**The `.env` file is a dev bootstrap convenience only.** It is gitignored. The `vault-init` container reads it on stack start, writes each secret into Vault, and exits. In production, secrets are loaded into Vault directly (e.g. `vault kv put secret/copilot @secrets.json`) and `.env` is replaced by `VAULT_ROOT_TOKEN=<token>` + ports only.
+
+If `vault-init` cannot read `.env`, it fails the stack — Vault is never seeded from defaults.
+
+---
+
 ## Secrets list (names only — values in Vault)
 
 | Secret | Vault key | Used by |

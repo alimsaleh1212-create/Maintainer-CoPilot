@@ -14,6 +14,7 @@ app.api.dependencies — never as module-level globals.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -127,6 +128,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.critical("refuse_to_boot", reason="embeddings_failed", detail=str(exc))
         await engine.dispose()
         sys.exit(1)
+
+    # Warm-load the cross-encoder reranker so the first /rag/search call
+    # doesn't pay the ~3-5s model load latency. Failure here is non-fatal —
+    # the retriever degrades gracefully to hybrid-only without reranking.
+    try:
+        from app.rag.reranker import get_reranker
+
+        reranker = get_reranker()
+        await asyncio.to_thread(reranker._load)
+        logger.info("reranker_ready", model=reranker.model_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reranker_warmup_failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # 4. Redis
