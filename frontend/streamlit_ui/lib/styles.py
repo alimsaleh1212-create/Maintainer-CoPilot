@@ -17,60 +17,69 @@ html, body, [class*="css"] {
     background: #0f172a !important;
 }
 
-/* Hide noisy chrome but KEEP the sidebar reopen arrow clickable.
- * The collapse control lives inside Streamlit's top header — hiding the
- * header itself (or zeroing its height) clips the button, which is exactly
- * the bug we are avoiding here. */
-#MainMenu { display: none !important; }
+/* ── Header chrome ───────────────────────────────────────────
+ * Streamlit 1.40+ puts BOTH sidebar controls inside `stToolbar`:
+ *   - `stSidebarCollapseButton` (X, when sidebar is OPEN)
+ *   - `stExpandSidebarButton`   (»  arrow, when sidebar is CLOSED)
+ * Previous versions of this stylesheet hid `stToolbar` entirely, which
+ * is why the » arrow vanished once the user collapsed the sidebar.
+ * The fix: keep the toolbar rendered, hide only the deploy / main-menu
+ * children we don't want, and pin both sidebar controls to a known
+ * fixed position so they remain reachable no matter what. */
 footer { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
-[data-testid="stToolbar"] { display: none !important; }
 [data-testid="stStatusWidget"] { display: none !important; }
+[data-testid="stAppDeployButton"] { display: none !important; }
+[data-testid="stMainMenu"] { display: none !important; }
 
-/* Keep the header element rendered but visually invisible — never use
- * `visibility: hidden` or `height: 0` because that hides its children too. */
 header[data-testid="stHeader"] {
     background: transparent !important;
     box-shadow: none !important;
     border: none !important;
 }
+[data-testid="stToolbar"] {
+    background: transparent !important;
+    pointer-events: none !important; /* let clicks through except on our buttons */
+}
+[data-testid="stToolbar"] button {
+    pointer-events: auto !important; /* re-enable on the sidebar buttons themselves */
+}
 
-/* The collapsed-sidebar reopen arrow. Streamlit has renamed this control
- * several times across versions — target every known data-testid so the
- * fix survives upgrades. Position it fixed in the top-left so it sits
- * above all custom backgrounds. */
-[data-testid="stSidebarCollapsedControl"],
-[data-testid="collapsedControl"],
-[data-testid="stSidebarCollapseButton"] {
+/* Pin both sidebar controls to the top-left so they cannot get clipped
+ * by any other rule, and style them as visible dark-tech chips. */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stExpandSidebarButton"] {
     position: fixed !important;
     top: 0.6rem !important;
     left: 0.6rem !important;
     z-index: 999999 !important;
     visibility: visible !important;
     opacity: 1 !important;
-    pointer-events: auto !important;
     background: #1e293b !important;
     border: 1px solid #334155 !important;
     border-radius: 8px !important;
-    padding: 4px !important;
+    padding: 2px !important;
     transition: background 0.15s, border-color 0.15s !important;
+    pointer-events: auto !important;
 }
-[data-testid="stSidebarCollapsedControl"] button,
-[data-testid="collapsedControl"] button,
-[data-testid="stSidebarCollapseButton"] button {
-    color: #e2e8f0 !important;
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stExpandSidebarButton"] button {
     background: transparent !important;
     border: none !important;
+    pointer-events: auto !important;
 }
-[data-testid="stSidebarCollapsedControl"]:hover,
-[data-testid="collapsedControl"]:hover,
-[data-testid="stSidebarCollapseButton"]:hover {
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"] {
+    color: #e2e8f0 !important;
+    font-size: 22px !important;
+}
+[data-testid="stSidebarCollapseButton"]:hover,
+[data-testid="stExpandSidebarButton"]:hover {
     background: #22c55e15 !important;
     border-color: #22c55e60 !important;
 }
-[data-testid="stSidebarCollapsedControl"]:hover button,
-[data-testid="collapsedControl"]:hover button,
-[data-testid="stSidebarCollapseButton"]:hover button {
+[data-testid="stSidebarCollapseButton"]:hover [data-testid="stIconMaterial"],
+[data-testid="stExpandSidebarButton"]:hover [data-testid="stIconMaterial"] {
     color: #22c55e !important;
 }
 
