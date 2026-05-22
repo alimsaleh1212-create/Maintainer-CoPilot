@@ -136,12 +136,17 @@ export function Chat({ config, token }: Props) {
         },
       ]);
     } catch (err) {
+      const status = (err as Error & { status?: number }).status;
+      const content =
+        status === 401
+          ? "Please sign in first — chat requires an account so I can keep your conversation memory."
+          : `Something went wrong. Please try again.${status ? ` (HTTP ${status})` : ""}`;
       setMessages((prev) => [
         ...prev,
         {
           id: String(Date.now() + 2),
           role: "assistant",
-          content: `Something went wrong. Please try again.`,
+          content,
           timestamp: Date.now(),
         },
       ]);
