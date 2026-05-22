@@ -208,8 +208,14 @@ class GeminiClient:
         data = resp.json()
         latency = (time.monotonic() - t0) * 1000
 
-        candidate = data["candidates"][0]
-        parts = candidate["content"]["parts"]
+        # Same defensive handling as chat(): a candidate without "content"
+        # (e.g. MAX_TOKENS, SAFETY, RECITATION finish reasons) must not crash.
+        candidates = data.get("candidates") or []
+        if not candidates:
+            return "", []
+        candidate = candidates[0]
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
 
         text_parts = [p["text"] for p in parts if "text" in p]
         fn_parts = [p["functionCall"] for p in parts if "functionCall" in p]
@@ -228,6 +234,7 @@ class GeminiClient:
             model=self._model,
             latency_ms=round(latency, 1),
             tool_count=len(tool_calls),
+            finish_reason=candidate.get("finishReason", "?"),
         )
         return " ".join(text_parts), tool_calls
 
