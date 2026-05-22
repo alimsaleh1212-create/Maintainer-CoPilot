@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
@@ -209,6 +210,18 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,
+    )
+
+    # Allow the demo host pages (8090 / 8091) to fetch /widgets/discover and
+    # /widget.js cross-origin. The discover endpoint is public and returns only
+    # the widget ID, so "*" is safe here. Authenticated endpoints still require
+    # a valid JWT in the Authorization header.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        expose_headers=["Content-Security-Policy"],
     )
 
     add_exception_handlers(app)
