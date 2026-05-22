@@ -63,6 +63,38 @@ def _load_system_prompt() -> str:
 # Tool schemas — passed to the LLM on every turn
 # ---------------------------------------------------------------------------
 
+# Maps the user-facing tool names stored on the Widget row (admin UI) to the
+# LLM tool-schema names used in this file.  Widget config uses short, friendly
+# names ("classify", "ner") while the LLM schema uses verbose ones
+# ("classify_issue", "extract_entities").  Aliases (e.g. the widget DB row
+# already containing the schema name) pass through unchanged.
+_WIDGET_TOOL_NAME_MAP: dict[str, str] = {
+    "classify": "classify_issue",
+    "ner": "extract_entities",
+    "summarize": "summarize_text",
+    "rag_search": "rag_search",
+    "write_memory": "write_memory",
+    # Aliases for safety
+    "classify_issue": "classify_issue",
+    "extract_entities": "extract_entities",
+    "summarize_text": "summarize_text",
+}
+
+
+def _filter_tool_schemas(enabled_tools: list[str] | None) -> list[dict[str, Any]]:
+    """Return the subset of _TOOL_SCHEMAS allowed by the widget config.
+
+    When ``enabled_tools`` is None (no widget context, e.g. Streamlit admin chat),
+    all tools are available.  An empty list disables every tool.
+    """
+    if enabled_tools is None:
+        return _TOOL_SCHEMAS
+    allowed_schema_names = {
+        _WIDGET_TOOL_NAME_MAP[t] for t in enabled_tools if t in _WIDGET_TOOL_NAME_MAP
+    }
+    return [t for t in _TOOL_SCHEMAS if t["name"] in allowed_schema_names]
+
+
 _TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "classify_issue",
@@ -161,6 +193,7 @@ class ChatbotService:
         top_k_memories: int = 3,
         rag_source_types: list[str] | None = None,
         rag_min_confidence: float = 0.30,
+        enabled_tools: list[str] | None = None,
     ) -> tuple[str, list[str], list[dict[str, Any]]]:
         """Run one user turn through the tool-calling loop.
 
@@ -197,7 +230,8 @@ class ChatbotService:
         messages: list[dict[str, Any]] = list(history)
         messages.append({"role": "user", "content": user_message})
 
-        # 4. Tool-call loop
+        # 4. Tool-call loop — restrict schemas to the widget's enabled set
+        tool_schemas = _filter_tool_schemas(enabled_tools)
         tools_used: list[str] = []
         # Citations are accumulated across any rag_search calls this turn,
         # deduplicated by chunk_id when we return so the UI gets a clean list.
@@ -206,7 +240,9 @@ class ChatbotService:
         assistant_content = ""
 
         for _round in range(MAX_TOOL_ROUNDS):
-            text, tool_calls = await self._call_llm(messages, system_prompt, trace=trace)
+            text, tool_calls = await self._call_llm(
+                messages, system_prompt, trace=trace, tool_schemas=tool_schemas
+            )
             assistant_content = text
 
             if not tool_calls:
@@ -294,6 +330,7 @@ class ChatbotService:
         messages: list[dict[str, Any]],
         system_prompt: str,
         trace: Any = None,
+        tool_schemas: list[dict[str, Any]] | None = None,
     ) -> tuple[str, list[ToolCall]]:
         """Try primary LLM with tools; fall back to Ollama plain chat on failure.
 
@@ -305,11 +342,44 @@ class ChatbotService:
         Returns:
             Tuple of (text_response, tool_calls). tool_calls is empty on fallback.
         """
+        active_schemas = tool_schemas if tool_schemas is not None else _TOOL_SCHEMAS
+        # When the widget has no enabled tools, skip tool-calling entirely —
+        # Gemini rejects empty tool lists, and there's nothing to call anyway.
+        if not active_schemas:
+            with self._tracer.span(trace, name="llm_call_no_tools"):
+                no_tools_note = (
+                    "\n\nNote: This widget has no tools enabled, so respond using only the "
+                    "conversation context. Do not promise to look anything up — explain politely "
+                    "if a question would require classification, RAG, summarisation, NER, or memory."
+                )
+                try:
+                    text = await self._primary.chat(
+                        messages=messages,
+                        system_prompt=system_prompt + no_tools_note,
+                    )
+                    if text:
+                        return text, []
+                    logger.warning("chatbot.primary_no_tools_empty")
+                except Exception as exc:
+                    logger.warning("chatbot.primary_no_tools_failed", error=str(exc))
+                try:
+                    text = await self._fallback.chat(
+                        messages=messages, system_prompt=system_prompt + no_tools_note
+                    )
+                    return text, []
+                except Exception as fallback_exc:
+                    logger.exception("chatbot.fallback_no_tools_failed", error=str(fallback_exc))
+                    return (
+                        "This widget is configured with no tools enabled. I can answer in plain "
+                        "text but cannot classify, search docs, summarise, or extract entities "
+                        "until an admin re-enables tools on this widget.",
+                        [],
+                    )
         with self._tracer.span(trace, name="llm_call", input={"message_count": len(messages)}):
             try:
                 return await self._primary.tool_call(
                     messages=messages,
-                    tools=_TOOL_SCHEMAS,
+                    tools=active_schemas,
                     system_prompt=system_prompt,
                 )
             except Exception as exc:

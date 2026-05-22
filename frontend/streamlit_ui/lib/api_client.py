@@ -106,6 +106,14 @@ class APIClient:
             payload["rag_min_confidence"] = rag_min_confidence
         return dict(self._post("/chat", payload))
 
+    def list_conversations(self) -> list[dict[str, Any]]:
+        """Return the current user's conversations (newest first)."""
+        return list(self._get("/chat/conversations"))
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """Return one conversation's title + history (server enforces ownership)."""
+        return dict(self._get(f"/chat/conversations/{conversation_id}"))
+
     # ------------------------------------------------------------------ widgets (admin)
 
     def list_widgets(self) -> list[dict[str, Any]]:

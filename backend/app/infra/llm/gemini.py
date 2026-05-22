@@ -165,14 +165,23 @@ class GeminiClient:
         data = resp.json()
         latency = (time.monotonic() - t0) * 1000
 
-        text: str = data["candidates"][0]["content"]["parts"][0]["text"]
+        # Gemini can return a candidate with no "content" key when the model
+        # has nothing useful to say (e.g. MAX_TOKENS / SAFETY finish reasons).
+        # Treat those as an empty completion instead of crashing the caller.
+        candidates = data.get("candidates") or []
+        if not candidates:
+            return ""
+        content = candidates[0].get("content") or {}
+        parts = content.get("parts") or []
+        text = parts[0].get("text", "") if parts else ""
         logger.info(
             "gemini.chat",
             model=self._model,
             latency_ms=round(latency, 1),
             tokens=data.get("usageMetadata", {}).get("totalTokenCount", "?"),
+            finish_reason=candidates[0].get("finishReason", "?"),
         )
-        return text
+        return str(text)
 
     async def tool_call(
         self,

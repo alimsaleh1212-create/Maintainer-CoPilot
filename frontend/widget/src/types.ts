@@ -13,10 +13,12 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  toolsUsed?: string[];
 }
 
 export interface ChatResponse {
   response: string;
   conversation_id: string;
-  tool_calls_made?: Array<{ tool: string; result: string }>;
+  tools_used?: string[];
+  citations?: unknown[];
 }

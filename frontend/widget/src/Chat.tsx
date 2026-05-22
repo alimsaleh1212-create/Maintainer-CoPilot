@@ -33,57 +33,160 @@ function TypingIndicator() {
   );
 }
 
+// Maps the backend's tool schema names to a short label + monochrome SVG.
+// Keep this in sync with backend/app/services/chatbot.py::_TOOL_SCHEMAS.
+const TOOL_DISPLAY: Record<string, { label: string; icon: JSX.Element }> = {
+  rag_search: {
+    label: "RAG search",
+    icon: (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.5" y2="16.5" />
+      </svg>
+    ),
+  },
+  classify_issue: {
+    label: "Classify",
+    icon: (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+        <line x1="7" y1="7" x2="7.01" y2="7" />
+      </svg>
+    ),
+  },
+  extract_entities: {
+    label: "NER",
+    icon: (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
+      </svg>
+    ),
+  },
+  summarize_text: {
+    label: "Summarize",
+    icon: (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="18" x2="14" y2="18" />
+      </svg>
+    ),
+  },
+  write_memory: {
+    label: "Memory",
+    icon: (
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+      </svg>
+    ),
+  },
+};
+
+function ToolChips({ tools }: { tools: string[] }) {
+  if (!tools.length) return null;
+  // Deduplicate while preserving order so a tool called twice shows once.
+  const unique = Array.from(new Set(tools));
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        marginTop: 8,
+        marginLeft: 36, // align under the bot bubble (28px avatar + 8px gap)
+        opacity: 0.92,
+      }}
+    >
+      {unique.map((tool) => {
+        const meta = TOOL_DISPLAY[tool] ?? { label: tool, icon: null };
+        return (
+          <span
+            key={tool}
+            title={`Tool used: ${tool}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "2px 8px",
+              borderRadius: 4,
+              background: "rgba(34, 197, 94, 0.10)",
+              border: "1px solid rgba(34, 197, 94, 0.30)",
+              color: "#22c55e",
+              fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace",
+              fontSize: 10.5,
+              fontWeight: 500,
+              letterSpacing: "0.01em",
+              lineHeight: 1.4,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {meta.icon}
+            <span>{meta.label}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function MessageBubble({ msg, primary }: { msg: Message; primary: string }) {
   const isUser = msg.role === "user";
   return (
     <div
       style={{
         display: "flex",
-        justifyContent: isUser ? "flex-end" : "flex-start",
+        flexDirection: "column",
         animation: "fadeSlide 0.2s ease-out forwards",
       }}
     >
-      {!isUser && (
-        <div
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: "50%",
-            background: "linear-gradient(135deg, #22c55e, #16a34a)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-            marginRight: 8,
-            marginTop: 2,
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" />
-          </svg>
-        </div>
-      )}
       <div
         style={{
-          maxWidth: "78%",
-          padding: "10px 14px",
-          borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-          background: isUser
-            ? `linear-gradient(135deg, ${primary}, ${primary}dd)`
-            : "#1e293b",
-          color: isUser ? "#fff" : "#e2e8f0",
-          fontSize: 13.5,
-          lineHeight: 1.55,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-          boxShadow: isUser
-            ? `0 2px 12px ${primary}40`
-            : "0 1px 4px rgba(0,0,0,0.3)",
-          border: isUser ? "none" : "1px solid #334155",
+          display: "flex",
+          justifyContent: isUser ? "flex-end" : "flex-start",
         }}
       >
-        {msg.content}
+        {!isUser && (
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: "linear-gradient(135deg, #22c55e, #16a34a)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              marginRight: 8,
+              marginTop: 2,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" /><path d="M12 8v4l3 3" />
+            </svg>
+          </div>
+        )}
+        <div
+          style={{
+            maxWidth: "78%",
+            padding: "10px 14px",
+            borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+            background: isUser
+              ? `linear-gradient(135deg, ${primary}, ${primary}dd)`
+              : "#1e293b",
+            color: isUser ? "#fff" : "#e2e8f0",
+            fontSize: 13.5,
+            lineHeight: 1.55,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            boxShadow: isUser
+              ? `0 2px 12px ${primary}40`
+              : "0 1px 4px rgba(0,0,0,0.3)",
+            border: isUser ? "none" : "1px solid #334155",
+          }}
+        >
+          {msg.content}
+        </div>
       </div>
+      {!isUser && msg.toolsUsed && msg.toolsUsed.length > 0 && (
+        <ToolChips tools={msg.toolsUsed} />
+      )}
     </div>
   );
 }
@@ -133,6 +236,7 @@ export function Chat({ config, token }: Props) {
           role: "assistant",
           content: data.response,
           timestamp: Date.now(),
+          toolsUsed: data.tools_used ?? [],
         },
       ]);
     } catch (err) {

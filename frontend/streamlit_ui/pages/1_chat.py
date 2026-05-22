@@ -13,7 +13,7 @@ from typing import Any
 
 import streamlit as st
 
-from lib.auth import get_api_client, require_auth
+from lib.auth import current_user, get_api_client, require_auth
 from lib.styles import inject_styles, page_header, render_citations
 
 st.set_page_config(page_title="Chat — Copilot", page_icon="💬", layout="wide")
@@ -54,43 +54,114 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Session state bootstrap ────────────────────────────────────────────────
-# conversations: {conv_id: {"title": str, "ts": str, "messages": list}}
-if "conversations" not in st.session_state:
-    st.session_state.conversations = {}
-if "active_conv_id" not in st.session_state:
-    st.session_state.active_conv_id = None
+# ── Per-user session state bootstrap ───────────────────────────────────────
+# Conversations are scoped by user_id so logging out and back in as a
+# different user shows that user's conversations only — never the previous
+# session's. The server enforces ownership too (verify_conversation_owner)
+# so the client-side scoping is defence-in-depth, not the only barrier.
+_user = current_user() or {}
+_user_id = str(_user.get("id", "anon"))
+
+if "conversations_by_user" not in st.session_state:
+    st.session_state.conversations_by_user = {}
+if "active_conv_by_user" not in st.session_state:
+    st.session_state.active_conv_by_user = {}
+if "convs_loaded_for_user" not in st.session_state:
+    st.session_state.convs_loaded_for_user = ""
 if "source_filter" not in st.session_state:
     st.session_state.source_filter = "Both"
 if "min_confidence" not in st.session_state:
     st.session_state.min_confidence = 0.30
 
 
+def _user_conversations() -> dict[str, dict[str, Any]]:
+    bucket = st.session_state.conversations_by_user.setdefault(_user_id, {})
+    return bucket  # type: ignore[no-any-return]
+
+
+def _hydrate_conversations_from_server() -> None:
+    """Pull this user's conversations from /chat/conversations once per login.
+
+    Server is the source of truth for ownership and history; the session_state
+    cache lets the sidebar render without an extra API call per rerun.
+    """
+    if st.session_state.convs_loaded_for_user == _user_id:
+        return
+    try:
+        client = get_api_client()
+        rows = client.list_conversations()
+    except Exception:  # noqa: BLE001
+        rows = []
+    bucket = _user_conversations()
+    for row in rows:
+        cid = row.get("conversation_id")
+        if not cid or cid in bucket:
+            continue
+        # Lazy-load messages: leave empty until the user clicks the conv.
+        ts = row.get("updated_at") or row.get("created_at") or ""
+        try:
+            ts_h = datetime.fromtimestamp(float(ts)).strftime("%H:%M") if ts else ""
+        except (TypeError, ValueError):
+            ts_h = ""
+        bucket[cid] = {
+            "title": row.get("title", "Conversation"),
+            "ts": ts_h,
+            "messages": [],
+            "_loaded": False,
+        }
+    st.session_state.convs_loaded_for_user = _user_id
+
+
+_hydrate_conversations_from_server()
+
+
 def _ensure_active_conversation() -> str:
     """Return the active conversation ID, creating a new one if needed."""
-    cid = st.session_state.active_conv_id
-    if cid is None or cid not in st.session_state.conversations:
+    bucket = _user_conversations()
+    cid = st.session_state.active_conv_by_user.get(_user_id)
+    if cid is None or cid not in bucket:
         cid = str(uuid.uuid4())
-        st.session_state.active_conv_id = cid
-        st.session_state.conversations[cid] = {
+        st.session_state.active_conv_by_user[_user_id] = cid
+        bucket[cid] = {
             "title": "New conversation",
             "ts": datetime.now().strftime("%H:%M"),
             "messages": [],
+            "_loaded": True,
         }
     return cid
 
 
 def _switch_conversation(cid: str) -> None:
-    st.session_state.active_conv_id = cid
+    st.session_state.active_conv_by_user[_user_id] = cid
+    bucket = _user_conversations()
+    meta = bucket.get(cid)
+    # Lazy-load messages from the server the first time the user opens this conv.
+    if meta is not None and not meta.get("_loaded"):
+        try:
+            data = get_api_client().get_conversation(cid)
+            meta["title"] = data.get("title", meta["title"])
+            meta["messages"] = [
+                {
+                    "role": m.get("role", "user"),
+                    "content": m.get("content", ""),
+                    "tool_calls": [],
+                    "citations": [],
+                }
+                for m in data.get("messages", [])
+            ]
+            meta["_loaded"] = True
+        except Exception:  # noqa: BLE001
+            meta["_loaded"] = True  # avoid retry loops; user can refresh
 
 
 def _new_conversation() -> None:
     cid = str(uuid.uuid4())
-    st.session_state.active_conv_id = cid
-    st.session_state.conversations[cid] = {
+    st.session_state.active_conv_by_user[_user_id] = cid
+    _user_conversations()[cid] = {
         "title": "New conversation",
         "ts": datetime.now().strftime("%H:%M"),
         "messages": [],
+        "_loaded": True,
     }
 
 
@@ -136,8 +207,8 @@ with st.sidebar:
     st.markdown("<div style='height:0.5rem'/>", unsafe_allow_html=True)
 
     # Conversation list — most recent first (by insertion order reversed)
-    all_convs = list(st.session_state.conversations.items())
-    active_id = st.session_state.active_conv_id or ""
+    all_convs = list(_user_conversations().items())
+    active_id = st.session_state.active_conv_by_user.get(_user_id) or ""
 
     for cid, meta in reversed(all_convs):
         msgs = meta.get("messages", [])
@@ -172,7 +243,7 @@ with st.sidebar:
 
 # ── Ensure we have a valid active conversation ─────────────────────────────
 conv_id = _ensure_active_conversation()
-conv_meta = st.session_state.conversations[conv_id]
+conv_meta = _user_conversations()[conv_id]
 messages: list[dict[str, Any]] = conv_meta["messages"]
 
 # ── Top control row: conv id · source filter · settings ───────────────────
@@ -263,9 +334,9 @@ if prompt := st.chat_input("Paste an issue title/body or ask a question…"):
                 returned_cid = data.get("conversation_id")
                 if returned_cid and returned_cid != conv_id:
                     # Backend assigned a different ID — sync it
-                    st.session_state.conversations[returned_cid] = conv_meta
-                    del st.session_state.conversations[conv_id]
-                    st.session_state.active_conv_id = returned_cid
+                    _user_conversations()[returned_cid] = conv_meta
+                    del _user_conversations()[conv_id]
+                    st.session_state.active_conv_by_user[_user_id] = returned_cid
                 tool_calls_made = data.get("tool_calls_made") or data.get("tools_used") or []
                 if tool_calls_made and isinstance(tool_calls_made[0], str):
                     tool_calls_made = [{"tool": t} for t in tool_calls_made]
