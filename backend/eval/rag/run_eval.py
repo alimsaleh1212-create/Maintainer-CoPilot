@@ -65,10 +65,15 @@ def load_thresholds() -> dict[str, Any]:
         return yaml.safe_load(f)  # type: ignore[no-any-return]
 
 
-def load_golden_set() -> list[dict[str, Any]]:
-    """Load golden Q/A pairs from JSONL."""
+def load_golden_set(path: Path | None = None) -> list[dict[str, Any]]:
+    """Load golden Q/A pairs from JSONL.
+
+    Args:
+        path: Override path; defaults to ``_GOLDEN_SET_PATH``.
+    """
+    target = path or _GOLDEN_SET_PATH
     rows: list[dict[str, Any]] = []
-    with open(_GOLDEN_SET_PATH) as f:
+    with open(target) as f:
         for line in f:
             if line.strip():
                 rows.append(json.loads(line))
@@ -285,14 +290,15 @@ def run_ragas(
 # ---------------------------------------------------------------------------
 
 
-def run_offline() -> int:
+def run_offline(golden_set_path: Path | None = None) -> int:
     """Validate golden set structure and threshold config only."""
+    resolved = golden_set_path or _GOLDEN_SET_PATH
     print("\nRAG Eval — offline mode (structure check only)")
     print(f"  Thresholds: {_THRESHOLDS_PATH}")
-    print(f"  Golden set: {_GOLDEN_SET_PATH}")
+    print(f"  Golden set: {resolved}")
 
     thresholds = load_thresholds()
-    golden_set = load_golden_set()
+    golden_set = load_golden_set(golden_set_path)
     print(f"\n  Golden set size: {len(golden_set)} Q/A pairs", flush=True)
 
     print("\n  Validating golden set structure …")
@@ -325,16 +331,21 @@ def run_live(
     gemini_model: str,
     gemini_judgment_model: str,
     skip_ragas: bool,
+    golden_set_path: Path | None = None,
 ) -> int:
     """Run full RAGAS + retrieval metric evaluation against the live API."""
+    resolved = golden_set_path or _GOLDEN_SET_PATH
+    results_path = resolved.parent / f"{resolved.stem}_results.json" if golden_set_path else _RESULTS_PATH
+
     print(f"\nRAG Eval — live mode")
     print(f"  API URL:       {api_url}")
     print(f"  Chat model:    {gemini_model}")
     print(f"  RAGAS judge:   {gemini_judgment_model}")
-    print(f"  Skip RAGAS:    {skip_ragas}", flush=True)
+    print(f"  Skip RAGAS:    {skip_ragas}")
+    print(f"  Golden set:    {resolved}", flush=True)
 
     thresholds = load_thresholds()
-    golden_set = load_golden_set()
+    golden_set = load_golden_set(golden_set_path)
     n = len(golden_set)
     print(f"\n  Golden set: {n} Q/A pairs")
 
@@ -380,8 +391,8 @@ def run_live(
         "thresholds": thresholds,
         "n_questions": n,
     }
-    _RESULTS_PATH.write_text(json.dumps(results_payload, indent=2))
-    print(f"\n  Results saved to {_RESULTS_PATH}")
+    results_path.write_text(json.dumps(results_payload, indent=2))
+    print(f"\n  Results saved to {results_path}")
 
     # Threshold checks
     print("\n  Threshold checks:")
@@ -439,14 +450,23 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Collect retrieval metrics but skip RAGAS LLM evaluation",
     )
+    p.add_argument(
+        "--golden-set",
+        default=None,
+        help=(
+            "Path to an alternative JSONL golden set (default: eval/rag/golden_set.jsonl). "
+            "Results are saved alongside the golden set as <name>_results.json."
+        ),
+    )
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
+    golden_path = Path(args.golden_set) if args.golden_set else None
 
     if args.offline:
-        sys.exit(run_offline())
+        sys.exit(run_offline(golden_set_path=golden_path))
     else:
         sys.exit(
             run_live(
@@ -456,5 +476,6 @@ if __name__ == "__main__":
                 gemini_model=args.gemini_model,
                 gemini_judgment_model=args.gemini_judgment_model,
                 skip_ragas=args.skip_ragas,
+                golden_set_path=golden_path,
             )
         )

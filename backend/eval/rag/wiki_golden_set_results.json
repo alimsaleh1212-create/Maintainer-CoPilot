@@ -1,9 +1,9 @@
 {
   "metrics": {
-    "hit_at_5": 0.64,
-    "mrr_at_10": 0.38,
-    "faithfulness": 0.7833333333333334,
-    "answer_relevancy": 0.43596644588838374
+    "hit_at_5": 0.76,
+    "mrr_at_10": 0.6346666666666667,
+    "faithfulness": 0.8928571428571429,
+    "answer_relevancy": 0.7506462985860446
   },
   "thresholds": {
     "faithfulness": 0.8,
