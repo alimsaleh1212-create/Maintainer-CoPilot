@@ -17,33 +17,61 @@ html, body, [class*="css"] {
     background: #0f172a !important;
 }
 
-/* Hide default header decoration / footer / hamburger but KEEP the sidebar
- * collapse control visible — otherwise users who close the sidebar have no
- * way to reopen it (the reopen arrow lives inside Streamlit's top header). */
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
+/* Hide noisy chrome but KEEP the sidebar reopen arrow clickable.
+ * The collapse control lives inside Streamlit's top header — hiding the
+ * header itself (or zeroing its height) clips the button, which is exactly
+ * the bug we are avoiding here. */
+#MainMenu { display: none !important; }
+footer { display: none !important; }
 [data-testid="stDecoration"] { display: none !important; }
-[data-testid="stToolbar"] { visibility: hidden; }
+[data-testid="stToolbar"] { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+
+/* Keep the header element rendered but visually invisible — never use
+ * `visibility: hidden` or `height: 0` because that hides its children too. */
 header[data-testid="stHeader"] {
     background: transparent !important;
-    height: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
 }
-/* The collapse/expand arrow itself — make sure it stays clickable, sits
- * above any custom backgrounds, and is visually obvious in dark mode. */
-[data-testid="stSidebarCollapseButton"],
+
+/* The collapsed-sidebar reopen arrow. Streamlit has renamed this control
+ * several times across versions — target every known data-testid so the
+ * fix survives upgrades. Position it fixed in the top-left so it sits
+ * above all custom backgrounds. */
 [data-testid="stSidebarCollapsedControl"],
-[data-testid="collapsedControl"] {
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapseButton"] {
+    position: fixed !important;
+    top: 0.6rem !important;
+    left: 0.6rem !important;
+    z-index: 999999 !important;
     visibility: visible !important;
-    display: block !important;
-    z-index: 1000 !important;
-    color: #e2e8f0 !important;
-    opacity: 0.9 !important;
-}
-[data-testid="stSidebarCollapseButton"]:hover,
-[data-testid="stSidebarCollapsedControl"]:hover,
-[data-testid="collapsedControl"]:hover {
-    color: #22c55e !important;
     opacity: 1 !important;
+    pointer-events: auto !important;
+    background: #1e293b !important;
+    border: 1px solid #334155 !important;
+    border-radius: 8px !important;
+    padding: 4px !important;
+    transition: background 0.15s, border-color 0.15s !important;
+}
+[data-testid="stSidebarCollapsedControl"] button,
+[data-testid="collapsedControl"] button,
+[data-testid="stSidebarCollapseButton"] button {
+    color: #e2e8f0 !important;
+    background: transparent !important;
+    border: none !important;
+}
+[data-testid="stSidebarCollapsedControl"]:hover,
+[data-testid="collapsedControl"]:hover,
+[data-testid="stSidebarCollapseButton"]:hover {
+    background: #22c55e15 !important;
+    border-color: #22c55e60 !important;
+}
+[data-testid="stSidebarCollapsedControl"]:hover button,
+[data-testid="collapsedControl"]:hover button,
+[data-testid="stSidebarCollapseButton"]:hover button {
+    color: #22c55e !important;
 }
 
 /* ── Sidebar ──────────────────────────────────────────────── */
