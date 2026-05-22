@@ -29,6 +29,10 @@ Usage
     # inside the api container (reads VAULT-resolved secrets from env)
     docker exec docker-api-1 uv run --group eval python eval/rag/run_eval.py \\
         --api-url http://localhost:8000 --api-token <jwt>
+
+GEMINI_JUDGMENT_MODEL env var (or --gemini-judgment-model CLI arg) controls which model
+acts as the RAGAS judge.  Defaults to gemini-2.5-pro for a stronger evaluation signal;
+falls back to the main gemini-model if the judgment model is unavailable.
 """
 
 from __future__ import annotations
@@ -103,8 +107,10 @@ def _rag_search(api_url: str, token: str, question: str) -> list[str]:
         )
         resp.raise_for_status()
         data = resp.json()
-        results: list[dict[str, Any]] = data.get("results", [])
-        return [r.get("content", r.get("text", "")) for r in results if r]
+        # /rag/search returns {"chunks": [...], "citations": [...], ...}
+        # Each chunk has {"text": ..., "source": ..., "score": ...}
+        chunks: list[dict[str, Any]] = data.get("chunks", data.get("results", []))
+        return [r.get("text", r.get("content", "")) for r in chunks if r]
     except Exception as exc:
         print(f"    ⚠  rag_search failed for '{question[:50]}': {exc}", flush=True)
         return []
@@ -128,7 +134,7 @@ def _chat_answer(api_url: str, token: str, question: str, contexts: list[str]) -
     try:
         resp = httpx.post(
             f"{api_url}/chat",
-            json={"message": augmented_question, "conversation_id": None},
+            json={"message": augmented_question},
             headers={"Authorization": f"Bearer {token}"},
             timeout=60.0,
         )
@@ -191,7 +197,7 @@ def run_ragas(
     contexts: list[list[str]],
     ground_truths: list[str],
     gemini_api_key: str,
-    gemini_model: str,
+    gemini_judgment_model: str,
 ) -> dict[str, float]:
     """Run RAGAS faithfulness + answer_relevancy with Gemini as the LLM judge.
 
@@ -199,8 +205,9 @@ def run_ragas(
     retrieved contexts (faithfulness) and whether the answer actually
     addresses the question (answer_relevancy).
 
-    Gemini is exposed via its OpenAI-compatible REST endpoint so we can use
-    ``langchain_openai.ChatOpenAI`` without the Google SDK.
+    Uses ``gemini_judgment_model`` (e.g. gemini-2.5-pro) as the judge — a
+    stronger model than the chat model so evaluation signal is reliable.
+    Gemini is exposed via its OpenAI-compatible REST endpoint.
 
     Args:
         questions: Question strings.
@@ -208,7 +215,7 @@ def run_ragas(
         contexts: Retrieved context chunks per question.
         ground_truths: Reference answer per question (from golden set).
         gemini_api_key: Gemini API key (from Vault / CLI arg).
-        gemini_model: Gemini model name (e.g. 'gemini-2.0-flash').
+        gemini_judgment_model: Gemini model used as RAGAS judge (e.g. 'gemini-2.5-pro').
 
     Returns:
         Dict with 'faithfulness' and 'answer_relevancy' scores.
@@ -222,12 +229,17 @@ def run_ragas(
 
     gemini_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
+    print(f"    RAGAS judge model: {gemini_judgment_model}", flush=True)
+    # gemini-2.5-pro is a "thinking" model that burns reasoning tokens before
+    # producing output.  max_tokens must be large enough to include both thinking
+    # and response tokens; 8192 covers typical RAGAS judgment lengths.
     llm = LangchainLLMWrapper(
         ChatOpenAI(
-            model=gemini_model,
+            model=gemini_judgment_model,
             api_key=gemini_api_key,  # type: ignore[arg-type]
             base_url=gemini_base_url,
-            temperature=0.0,
+            temperature=1.0,  # Gemini thinking models require temperature=1.0
+            max_tokens=8192,
         )
     )
     embeddings = LangchainEmbeddingsWrapper(
@@ -306,13 +318,15 @@ def run_live(
     api_token: str,
     gemini_api_key: str,
     gemini_model: str,
+    gemini_judgment_model: str,
     skip_ragas: bool,
 ) -> int:
     """Run full RAGAS + retrieval metric evaluation against the live API."""
     print(f"\nRAG Eval — live mode")
-    print(f"  API URL:     {api_url}")
-    print(f"  RAGAS judge: {gemini_model}")
-    print(f"  Skip RAGAS:  {skip_ragas}", flush=True)
+    print(f"  API URL:       {api_url}")
+    print(f"  Chat model:    {gemini_model}")
+    print(f"  RAGAS judge:   {gemini_judgment_model}")
+    print(f"  Skip RAGAS:    {skip_ragas}", flush=True)
 
     thresholds = load_thresholds()
     golden_set = load_golden_set()
@@ -347,7 +361,7 @@ def run_live(
             contexts=all_contexts,
             ground_truths=ground_truths,
             gemini_api_key=gemini_api_key,
-            gemini_model=gemini_model,
+            gemini_judgment_model=gemini_judgment_model,
         )
         print(f"  Faithfulness:     {ragas_metrics['faithfulness']:.3f}")
         print(f"  Answer relevancy: {ragas_metrics['answer_relevancy']:.3f}", flush=True)
@@ -400,12 +414,20 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--gemini-api-key",
         default=os.getenv("GEMINI_API_KEY", ""),
-        help="Gemini API key (for RAGAS judge)",
+        help="Gemini API key (used both for chat answers and RAGAS judge)",
     )
     p.add_argument(
         "--gemini-model",
         default=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-        help="Gemini model name",
+        help="Gemini model used to generate chat answers",
+    )
+    p.add_argument(
+        "--gemini-judgment-model",
+        default=os.getenv("GEMINI_JUDGMENT_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-pro")),
+        help=(
+            "Gemini model used as the RAGAS judge (default: GEMINI_JUDGMENT_MODEL env var, "
+            "falls back to GEMINI_MODEL). Use a stronger model here for reliable evaluation."
+        ),
     )
     p.add_argument(
         "--skip-ragas",
@@ -427,6 +449,7 @@ if __name__ == "__main__":
                 api_token=args.api_token,
                 gemini_api_key=args.gemini_api_key,
                 gemini_model=args.gemini_model,
+                gemini_judgment_model=args.gemini_judgment_model,
                 skip_ragas=args.skip_ragas,
             )
         )
