@@ -1,11 +1,12 @@
 export interface WidgetConfig {
-  id: string;
+  public_widget_id: string;
   greeting: string;
   theme: {
     primaryColor?: string;
     position?: "bottom-right" | "bottom-left";
   };
   enabled_tools: string[];
+  enabled?: boolean;
 }
 
 export interface Message {

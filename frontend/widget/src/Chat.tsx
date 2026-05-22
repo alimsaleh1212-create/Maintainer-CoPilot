@@ -227,7 +227,7 @@ export function Chat({ config, token }: Props) {
     setLoading(true);
 
     try {
-      const data = await sendChat(text, conversationId, config.id, token);
+      const data = await sendChat(text, conversationId, config.public_widget_id, token);
       if (data.conversation_id) setConversationId(data.conversation_id);
       setMessages((prev) => [
         ...prev,
