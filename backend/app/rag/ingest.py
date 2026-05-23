@@ -71,9 +71,7 @@ class CorpusIngestor:
             candidate.append(chunk)
 
         # Skip chunks already in the DB — saves the slow embed roundtrip
-        existing = await self._existing_chunk_ids(
-            db_session, [c.chunk_id for c in candidate]
-        )
+        existing = await self._existing_chunk_ids(db_session, [c.chunk_id for c in candidate])
         pending = [c for c in candidate if c.chunk_id not in existing]
         stats["already_present"] = len(candidate) - len(pending)
         logger.info(
@@ -121,9 +119,7 @@ class CorpusIngestor:
                 logger.exception("corpus_ingest.wiki_failed", file=file_path, error=str(exc))
                 stats["errors"] += 1
 
-        existing = await self._existing_chunk_ids(
-            db_session, [c.chunk_id for c in candidate]
-        )
+        existing = await self._existing_chunk_ids(db_session, [c.chunk_id for c in candidate])
         pending = [c for c in candidate if c.chunk_id not in existing]
         stats["already_present"] = len(candidate) - len(pending)
         logger.info(
@@ -154,9 +150,9 @@ class CorpusIngestor:
         """
         if not chunk_ids:
             return set()
-        stmt = text(
-            "SELECT chunk_id FROM rag_chunks WHERE chunk_id = ANY(:ids)"
-        ).bindparams(ids=chunk_ids)
+        stmt = text("SELECT chunk_id FROM rag_chunks WHERE chunk_id = ANY(:ids)").bindparams(
+            ids=chunk_ids
+        )
         rows = (await db_session.execute(stmt)).fetchall()
         return {row.chunk_id for row in rows}
 

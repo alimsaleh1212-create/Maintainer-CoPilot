@@ -161,9 +161,7 @@ async def discover_widget(
         if parsed.scheme and parsed.netloc:
             origin = f"{parsed.scheme}://{parsed.netloc}"
     widget = await widget_service.first_enabled_widget(origin=origin)
-    return WidgetDiscoverResponse(
-        public_widget_id=widget.public_widget_id if widget else None
-    )
+    return WidgetDiscoverResponse(public_widget_id=widget.public_widget_id if widget else None)
 
 
 @router.get("/{widget_id}/config", response_model=WidgetConfigResponse)

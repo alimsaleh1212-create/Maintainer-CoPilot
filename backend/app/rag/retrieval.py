@@ -173,13 +173,13 @@ class HybridRetriever:
         if source_filter:
             where_clause = "WHERE source = ANY(:sources) "
             params["sources"] = source_filter
-        stmt = text(
-            "SELECT id, chunk_id, text, source, "
-            "       1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
-            f"FROM rag_chunks {where_clause}"
-            "ORDER BY embedding <=> CAST(:query_embedding AS vector) "
-            "LIMIT :top_k"
-        ).bindparams(**params)
+        # ``where_clause`` is a static literal chosen by an internal branch
+        # ("" or "WHERE source = ANY(:sources) "); no user input interpolated.
+        select_clause = "SELECT id, chunk_id, text, source, "
+        score_clause = "1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
+        order_limit = "ORDER BY embedding <=> CAST(:query_embedding AS vector) LIMIT :top_k"
+        sql = f"{select_clause} {score_clause} FROM rag_chunks {where_clause}{order_limit}"  # noqa: S608
+        stmt = text(sql).bindparams(**params)
 
         results = await db_session.execute(stmt)
         rows = results.fetchall()
@@ -230,15 +230,16 @@ class HybridRetriever:
         if source_filter:
             where_extra = "AND source = ANY(:sources) "
             params["sources"] = source_filter
-        stmt = text(
-            "SELECT id, chunk_id, text, source, "
-            "       ts_rank_cd(tsvector, plainto_tsquery('english', :query)) as score "
-            "FROM rag_chunks "
-            "WHERE tsvector @@ plainto_tsquery('english', :query) "
-            f"{where_extra}"
-            "ORDER BY score DESC "
-            "LIMIT :top_k"
-        ).bindparams(**params)
+        # ``where_extra`` is a static literal from an internal branch
+        # ("" or "AND source = ANY(:sources) "); no user input interpolated.
+        select_clause = "SELECT id, chunk_id, text, source, "
+        score_clause = "ts_rank_cd(tsvector, plainto_tsquery('english', :query)) as score "
+        where_base = "WHERE tsvector @@ plainto_tsquery('english', :query) "
+        order_limit = "ORDER BY score DESC LIMIT :top_k"
+        sql = (
+            f"{select_clause} {score_clause} FROM rag_chunks {where_base}{where_extra}{order_limit}"  # noqa: S608
+        )
+        stmt = text(sql).bindparams(**params)
 
         results = await db_session.execute(stmt)
         rows = results.fetchall()

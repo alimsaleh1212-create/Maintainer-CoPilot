@@ -118,9 +118,7 @@ class MemoryService:
     # Conversation index per user (multi-tenant isolation)
     # ------------------------------------------------------------------
 
-    async def verify_conversation_owner(
-        self, conversation_id: str, user_id: uuid.UUID
-    ) -> bool:
+    async def verify_conversation_owner(self, conversation_id: str, user_id: uuid.UUID) -> bool:
         """Return True if the conversation has no recorded owner OR is owned by user_id.
 
         Conversations created before this index existed have no meta record; we
