@@ -37,7 +37,10 @@ All patterns are compiled in `backend/app/infra/redaction.py`. `redact_text()` r
                               app code via Depends(get_settings)
 ```
 
-**Hard rule:** No `os.getenv` lives outside `backend/app/config.py` and `backend/app/infra/vault.py`. Verified by grep at commit time.
+**Hard rule (scope: long-lived service processes):** No `os.getenv` lives in `backend/app/` outside `config.py` and `infra/vault.py`. Verified by grep at commit time. The two exceptions are:
+
+- `backend/app/config.py` reads `VAULT_ADDR` + `VAULT_ROOT_TOKEN` directly from env — this is the only chicken-and-egg pair (Vault can't store its own bootstrap credentials).
+- One-shot operator CLIs in `backend/scripts/` and `backend/eval/` (run by humans or CI, not by the long-running API) may accept secrets via `--flag` with env fallback. They are *not* the application; they pass through explicit operator-provided values.
 
 **The `.env` file is a dev bootstrap convenience only.** It is gitignored. The `vault-init` container reads it on stack start, writes each secret into Vault, and exits. In production, secrets are loaded into Vault directly (e.g. `vault kv put secret/copilot @secrets.json`) and `.env` is replaced by `VAULT_ROOT_TOKEN=<token>` + ports only.
 

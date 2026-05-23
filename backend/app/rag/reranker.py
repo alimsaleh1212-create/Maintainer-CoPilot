@@ -1,54 +1,46 @@
-"""Cross-encoder reranker for hybrid retrieval.
+"""Async HTTP client for the model-server's cross-encoder rerank endpoint.
 
-Wraps a local sentence-transformers CrossEncoder (BAAI/bge-reranker-base by
-default). Inference runs in a thread (the model is sync / CPU-bound) so the
-event loop stays unblocked. The model loads once at startup via the
-``get_reranker()`` lazy-singleton — heavy CPU work belongs in lifespan, not
-per-request.
+The actual BAAI/bge-reranker-base model lives in the ``model-server`` container
+— it already has torch loaded for the DistilBERT classifier, so the reranker
+is a free addition there and keeps the API container slim (no torch, no
+transformers, no sentence-transformers in the API venv).
+
+Failure mode: if model-server returns 503 (reranker_unavailable) or is
+unreachable, ``rerank()`` returns an empty list. The hybrid retriever then
+keeps its dense+sparse ordering and the call still succeeds — degradation,
+not failure.
 """
 
 from __future__ import annotations
 
-import asyncio
 from functools import lru_cache
-from typing import TYPE_CHECKING
 
+import httpx
 import structlog
 
-if TYPE_CHECKING:
-    from sentence_transformers import CrossEncoder
+from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
 
-_DEFAULT_MODEL = "BAAI/bge-reranker-base"
 
-
-class CrossEncoderReranker:
-    """Thin async wrapper around sentence-transformers CrossEncoder.
+class ModelServerReranker:
+    """Thin async HTTP client around ``POST /rerank`` on model-server.
 
     Args:
-        model_name: HuggingFace model ID for the cross-encoder.
+        base_url: model-server base URL (defaults to Settings.model_server_base_url).
+        timeout: per-request timeout in seconds.
     """
 
-    def __init__(self, model_name: str = _DEFAULT_MODEL) -> None:
-        self.model_name = model_name
-        self._model: CrossEncoder | None = None
-
-    def _load(self) -> CrossEncoder:
-        if self._model is None:
-            # Import lazily so the heavy torch/transformers dep doesn't get
-            # pulled in on module load (matters for unit tests / scripts).
-            from sentence_transformers import CrossEncoder
-
-            logger.info("reranker.loading", model=self.model_name)
-            self._model = CrossEncoder(self.model_name, max_length=512)
-            logger.info("reranker.loaded", model=self.model_name)
-        return self._model
+    def __init__(self, base_url: str | None = None, timeout: float = 30.0) -> None:
+        if base_url is None:
+            base_url = get_settings().model_server_base_url
+        self._base = base_url.rstrip("/")
+        self._timeout = timeout
 
     async def rerank(
         self, query: str, passages: list[str], top_k: int | None = None
     ) -> list[tuple[int, float]]:
-        """Score (query, passage) pairs and return (index, score) sorted desc.
+        """Score (query, passage) pairs and return ``[(index, score), ...]`` desc.
 
         Args:
             query: User question used as the cross-encoder's left input.
@@ -56,27 +48,38 @@ class CrossEncoderReranker:
             top_k: Truncate to the top ``top_k`` results (None = return all).
 
         Returns:
-            List of ``(original_index, score)`` tuples sorted by score desc.
+            ``[(original_index, score), ...]`` sorted by score desc, or an
+            empty list when the reranker is unavailable (caller should treat
+            this as "skip the rerank step").
         """
         if not passages:
             return []
 
-        model = self._load()
-        pairs = [(query, p) for p in passages]
-        # Cross-encoder inference is sync + CPU heavy. Push it off-thread so
-        # we don't block the event loop for ~50-200ms per call.
-        scores = await asyncio.to_thread(model.predict, pairs)
+        payload: dict[str, object] = {"query": query, "passages": passages}
+        if top_k is not None:
+            payload["top_k"] = top_k
 
-        indexed = sorted(
-            enumerate(float(s) for s in scores), key=lambda t: t[1], reverse=True
-        )
-        return indexed[:top_k] if top_k else indexed
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(f"{self._base}/rerank", json=payload)
+                resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # 503 = reranker_unavailable (model failed to load). Gracefully
+            # fall back; do not raise — this is an enrichment, not core.
+            if exc.response.status_code == 503:
+                logger.warning("reranker.unavailable", detail=exc.response.text)
+                return []
+            logger.warning("reranker.http_error", status=exc.response.status_code)
+            return []
+        except (httpx.NetworkError, httpx.TimeoutException) as exc:
+            logger.warning("reranker.network_error", error=str(exc))
+            return []
+
+        data = resp.json()
+        return [(int(r["index"]), float(r["score"])) for r in data.get("results", [])]
 
 
 @lru_cache(maxsize=1)
-def get_reranker() -> CrossEncoderReranker:
-    """Return the process-wide reranker singleton.
-
-    Loaded once in the FastAPI lifespan via a warm-up call to ``_load()``.
-    """
-    return CrossEncoderReranker()
+def get_reranker() -> ModelServerReranker:
+    """Process-wide singleton — cheap to construct (httpx is created per call)."""
+    return ModelServerReranker()

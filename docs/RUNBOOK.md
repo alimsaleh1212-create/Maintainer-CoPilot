@@ -109,6 +109,35 @@ curl http://localhost:8001/healthz   # Model-server
 curl http://localhost:8501/_stcore/health  # Streamlit
 ```
 
+## Picking up Dependency or Bundle Changes (named-volume gotcha)
+
+The dev compose override mounts named volumes for the API venv, model-server venv, and built widget bundle:
+
+| Volume | Container path | Purpose |
+|---|---|---|
+| `docker_api_dev_venv` | `/app/.venv` on `api` | hot-reload dev convenience |
+| `docker_model_server_dev_venv` | `/app/.venv` on `model-server` | same |
+| `docker_widget_dist` | `/app/static/widget` on `api`, `/usr/share/nginx/html` on `widget` | shared bundle |
+
+Named volumes **persist across `docker compose up --build`** and **shadow whatever is in the new image**. After:
+- `uv add <pkg>` (changes `.venv`)
+- editing widget source (changes the bundle)
+
+you must drop the relevant volume before the change appears in the running container. Recipe:
+
+```bash
+# Backend dep change
+docker compose down api && docker volume rm docker_api_dev_venv && docker compose up -d api
+
+# Model-server change
+docker compose down model-server && docker volume rm docker_model_server_dev_venv && docker compose up -d model-server
+
+# Widget bundle change
+docker compose down widget api && docker volume rm docker_widget_dist && docker compose up -d api widget
+```
+
+Symptom that you forgot: code change is in the image, `docker exec ... cat /app/foo.py` shows the old content. That's the volume mount winning over the image layer.
+
 ## Stopping the Stack
 
 ```bash

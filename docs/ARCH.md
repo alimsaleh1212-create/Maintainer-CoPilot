@@ -95,13 +95,18 @@ Ingest time:
 
 Query time:
   user query
-    → query rewrite (HyDE via Gemini Flash)
+    → query rewrite (multi-query template + Gemini Flash fallback)
     → dense retrieval (pgvector cosine similarity)
     + sparse retrieval (PostgreSQL tsvector + ts_rank_cd)
-    → reciprocal-rank fusion (top-20 candidates)
-    → BAAI/bge-reranker-base cross-encoder (top-5)
+    → score fusion (0.6 dense + 0.4 sparse, top-20 candidates)
+    → cross-encoder rerank — calls model-server:8001/rerank (BAAI/bge-reranker-base)
     → context assembly → LLM
 ```
+
+The reranker runs in the **model-server** container (not the API container) because:
+1. model-server already has torch loaded for the DistilBERT classifier — adding the reranker there is free.
+2. Keeping torch + sentence-transformers out of the API container dropped its image from 1.56 GB → 727 MB.
+3. If model-server returns 503 (model failed to load) or is unreachable, the retriever falls back to the dense+sparse hybrid score — graceful degrade, not failure.
 
 ## Security posture
 

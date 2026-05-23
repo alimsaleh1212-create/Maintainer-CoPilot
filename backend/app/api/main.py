@@ -14,7 +14,6 @@ app.api.dependencies — never as module-level globals.
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -129,17 +128,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await engine.dispose()
         sys.exit(1)
 
-    # Warm-load the cross-encoder reranker so the first /rag/search call
-    # doesn't pay the ~3-5s model load latency. Failure here is non-fatal —
-    # the retriever degrades gracefully to hybrid-only without reranking.
+    # Cross-encoder rerank runs out-of-process in model-server (which already
+    # has torch loaded for the DistilBERT classifier). Probe model-server's
+    # /healthz to fail fast on misconfiguration; rerank itself is best-effort
+    # and the retriever handles 503 / network errors gracefully.
     try:
-        from app.rag.reranker import get_reranker
-
-        reranker = get_reranker()
-        await asyncio.to_thread(reranker._load)
-        logger.info("reranker_ready", model=reranker.model_name)
+        async with httpx.AsyncClient(timeout=10.0) as probe:
+            health = await probe.get(f"{settings.model_server_base_url}/healthz")
+        logger.info("model_server_probed", status=health.status_code)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("reranker_warmup_failed", error=str(exc))
+        logger.warning("model_server_probe_failed", error=str(exc))
 
     # ------------------------------------------------------------------
     # 4. Redis

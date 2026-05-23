@@ -30,6 +30,34 @@ from model_server.inference import ClassificationResult, predict_sync, sha256_mo
 logger = structlog.get_logger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+
+# ── Settings: route through Vault, fall back to env defaults for dev ──────────
+# Why this shape: the app rule says secrets come from Vault. model-server is a
+# separate process from the main API, but it's a long-lived service too and
+# should follow the same discipline. We import the Vault client (also pinned
+# via uv lock) and read MinIO creds from the same secret/copilot path the API
+# uses. If Vault is unreachable, we degrade to local defaults so dev still
+# works without the full stack.
+def _resolve_secret(key: str, default: str) -> str:
+    """Read ``key`` from secret/copilot in Vault; return ``default`` on any failure."""
+    vault_addr = os.environ.get("VAULT_ADDR", "")
+    vault_token = os.environ.get("VAULT_ROOT_TOKEN", "")
+    if not vault_addr or not vault_token:
+        return default
+    try:
+        import hvac  # type: ignore[import-untyped]
+
+        client = hvac.Client(url=vault_addr, token=vault_token)
+        if not client.is_authenticated():
+            return default
+        data = client.secrets.kv.v2.read_secret_version(
+            path="copilot", mount_point="secret", raise_on_deleted_version=True
+        )["data"]["data"]
+        return str(data.get(key, default))
+    except Exception:  # noqa: BLE001
+        return default
+
+
 # ── Model path ─────────────────────────────────────────────────────────────────
 # Priority:
 #   1. CLASSIFIER_MODEL_DIR env var (explicit local path — for dev bind-mount)
@@ -38,14 +66,15 @@ logging.basicConfig(level=logging.INFO)
 _DEFAULT_MODEL_DIR = (
     Path(__file__).resolve().parent.parent.parent / "ml" / "artifacts" / "classifier" / "best"
 )
-MODEL_DIR = Path(os.getenv("CLASSIFIER_MODEL_DIR", str(_DEFAULT_MODEL_DIR)))
+MODEL_DIR = Path(os.environ.get("CLASSIFIER_MODEL_DIR", str(_DEFAULT_MODEL_DIR)))
 
-# MinIO pull config (download weights on container start)
-_MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "")
-_MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-_MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-_MINIO_BUCKET = os.getenv("MINIO_BUCKET", "copilot")
-_MINIO_MODEL_PREFIX = os.getenv("MINIO_MODEL_PREFIX", "models/classifier/best")
+# MinIO pull config — endpoint and bucket are infra paths (not secrets), so
+# they come from env; access/secret keys come from Vault.
+_MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "")
+_MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "copilot")
+_MINIO_MODEL_PREFIX = os.environ.get("MINIO_MODEL_PREFIX", "models/classifier/best")
+_MINIO_ACCESS_KEY = _resolve_secret("minio_access_key", "minioadmin")
+_MINIO_SECRET_KEY = _resolve_secret("minio_secret_key", "minioadmin")
 
 
 def _pull_model_from_minio(dest: Path) -> bool:
@@ -103,6 +132,24 @@ class NERRequest(BaseModel):
 
 class SummarizeRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=16384)
+
+
+class RerankRequest(BaseModel):
+    """Cross-encoder rerank request — score (query, passage) pairs."""
+
+    query: str = Field(..., min_length=1, max_length=4096)
+    passages: list[str] = Field(..., min_length=1, max_length=64)
+    top_k: int | None = Field(default=None, ge=1, le=64)
+
+
+class RerankItem(BaseModel):
+    index: int  # position in the original ``passages`` list
+    score: float
+
+
+class RerankResponse(BaseModel):
+    results: list[RerankItem]
+    model: str
 
 
 @asynccontextmanager
@@ -167,10 +214,27 @@ async def lifespan(app: FastAPI) -> Any:
         sha256=actual_hash[:16],
     )
 
+    # ── Cross-encoder reranker (BAAI/bge-reranker-base) ───────────────────
+    # Failure is non-fatal — RAG falls back to hybrid scoring if rerank
+    # is unavailable. The /rerank endpoint returns 503 in that case.
+    reranker_name = os.environ.get("RERANKER_MODEL", "BAAI/bge-reranker-base")
+    try:
+        from sentence_transformers import CrossEncoder
+
+        logger.info("reranker.loading", model=reranker_name)
+        app.state.reranker = CrossEncoder(reranker_name, max_length=512)
+        app.state.reranker_name = reranker_name
+        logger.info("reranker_loaded", model=reranker_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reranker_load_failed", model=reranker_name, error=str(exc))
+        app.state.reranker = None
+        app.state.reranker_name = reranker_name
+
     yield
 
     del app.state.tokenizer
     del app.state.model
+    app.state.reranker = None
     logger.info("model_server_shutdown")
 
 
@@ -237,3 +301,30 @@ async def summarize(req: SummarizeRequest) -> dict[str, str]:
     text = req.text[:500].strip()
     summary = text.split("\n")[0][:200]
     return {"summary": summary}
+
+
+@app.post("/rerank", response_model=RerankResponse)
+async def rerank(req: RerankRequest) -> RerankResponse:
+    """Cross-encoder rerank: score (query, passage) pairs, return sorted descending.
+
+    Returns 503 if the reranker model failed to load at startup so the caller
+    (RAGService) can transparently fall back to the hybrid score.
+    """
+    reranker = getattr(app.state, "reranker", None)
+    if reranker is None:
+        raise HTTPException(status_code=503, detail="reranker_unavailable")
+
+    pairs = [(req.query, p) for p in req.passages]
+    # CrossEncoder.predict is sync + CPU heavy; keep the event loop free.
+    scores = await asyncio.to_thread(reranker.predict, pairs)
+    ranked = sorted(
+        ((i, float(s)) for i, s in enumerate(scores)),
+        key=lambda t: t[1],
+        reverse=True,
+    )
+    if req.top_k is not None:
+        ranked = ranked[: req.top_k]
+    return RerankResponse(
+        results=[RerankItem(index=i, score=s) for i, s in ranked],
+        model=app.state.reranker_name,
+    )
