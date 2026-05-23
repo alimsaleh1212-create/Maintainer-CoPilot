@@ -20,8 +20,10 @@ from app.api.dependencies import (
     MemoryServiceDep,
     RAGServiceDep,
     SettingsDep,
+    WidgetServiceDep,
 )
 from app.api.routes.auth import get_current_user
+from app.domain.errors import NotFoundError, PermissionDenied
 from app.repositories.models import User
 
 logger = structlog.get_logger(__name__)
@@ -44,6 +46,13 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = Field(
         default=None,
         description="Existing conversation ID; omit to start a new conversation",
+    )
+    widget_id: str | None = Field(
+        default=None,
+        description=(
+            "Public widget ID (wgt_*) — when present, restricts the LLM to the "
+            "tools enabled on that widget. Omit when calling from the Streamlit UI."
+        ),
     )
     rag_source_types: list[SourceType] | None = Field(
         default=None,
@@ -98,6 +107,7 @@ async def chat(
     memory_service: MemoryServiceDep,
     classification_service: ClassificationServiceDep,
     rag_service: RAGServiceDep,
+    widget_service: WidgetServiceDep,
     current_user: User = Depends(get_current_user),
 ) -> ChatResponse:
     """Run one user turn through the tool-calling chatbot loop.
@@ -120,10 +130,34 @@ async def chat(
     """
     conversation_id = body.conversation_id or str(uuid.uuid4())
 
+    # If the request came from an embedded widget, look up the widget's
+    # enabled_tools list and restrict the LLM accordingly.  When no widget_id
+    # is supplied (e.g. Streamlit admin chat), the chatbot gets all tools.
+    enabled_tools: list[str] | None = None
+    if body.widget_id:
+        widget = await widget_service.get_widget(body.widget_id)
+        if widget is None:
+            raise NotFoundError(f"Widget {body.widget_id} not found")
+        if not widget.enabled:
+            raise PermissionDenied(f"Widget {body.widget_id} is disabled")
+        enabled_tools = list(widget.enabled_tools)
+
+    # Verify the caller owns this conversation (multi-tenant isolation).
+    # Returns False if the conversation has a different owner.
+    if body.conversation_id:
+        owner_ok = await memory_service.verify_conversation_owner(
+            conversation_id=body.conversation_id,
+            user_id=current_user.id,
+        )
+        if not owner_ok:
+            raise PermissionDenied("Conversation belongs to a different user")
+
     logger.info(
         "chat.request",
         user_id=str(current_user.id),
         conversation_id=conversation_id,
+        widget_id=body.widget_id,
+        enabled_tools=enabled_tools,
         message_length=len(body.message),
     )
 
@@ -138,6 +172,14 @@ async def chat(
         top_k_memories=settings.long_term_memory_top_k,
         rag_source_types=body.rag_source_types,
         rag_min_confidence=body.rag_min_confidence,
+        enabled_tools=enabled_tools,
+    )
+
+    # Persist conversation metadata so this user can list/resume it later.
+    await memory_service.touch_conversation(
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        first_message=body.message if not body.conversation_id else None,
     )
 
     return ChatResponse(
@@ -145,4 +187,83 @@ async def chat(
         conversation_id=conversation_id,
         tools_used=tools_used,
         citations=[CitationOut(**c) for c in citations],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Conversation listing / history (scoped to the authenticated user)
+# ---------------------------------------------------------------------------
+
+
+class ConversationSummary(BaseModel):
+    """One row in the user's conversation list."""
+
+    conversation_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class ConversationMessage(BaseModel):
+    """One message in a conversation history."""
+
+    role: str
+    content: str
+
+
+class ConversationHistoryResponse(BaseModel):
+    conversation_id: str
+    title: str
+    messages: list[ConversationMessage]
+
+
+@router.get("/chat/conversations", response_model=list[ConversationSummary])
+async def list_my_conversations(
+    memory_service: MemoryServiceDep,
+    current_user: User = Depends(get_current_user),
+) -> list[ConversationSummary]:
+    """List the authenticated user's conversations, newest first."""
+    convs = await memory_service.list_user_conversations(current_user.id)
+    return [ConversationSummary(**c) for c in convs]
+
+
+@router.get(
+    "/chat/conversations/{conversation_id}",
+    response_model=ConversationHistoryResponse,
+)
+async def get_my_conversation(
+    conversation_id: str,
+    memory_service: MemoryServiceDep,
+    current_user: User = Depends(get_current_user),
+) -> ConversationHistoryResponse:
+    """Return the history for a conversation owned by the authenticated user.
+
+    Returns 403 if the conversation belongs to a different user, 404 if it
+    does not exist.
+    """
+    owner_ok = await memory_service.verify_conversation_owner(
+        conversation_id=conversation_id, user_id=current_user.id
+    )
+    if not owner_ok:
+        raise PermissionDenied("Conversation belongs to a different user")
+
+    history = await memory_service.get_history(conversation_id)
+    if not history:
+        # No meta + no history = doesn't exist for this user
+        all_convs = await memory_service.list_user_conversations(current_user.id)
+        if not any(c["conversation_id"] == conversation_id for c in all_convs):
+            raise NotFoundError(f"Conversation {conversation_id} not found")
+
+    convs = await memory_service.list_user_conversations(current_user.id)
+    title = next(
+        (c["title"] for c in convs if c["conversation_id"] == conversation_id),
+        "Conversation",
+    )
+    return ConversationHistoryResponse(
+        conversation_id=conversation_id,
+        title=title,
+        messages=[
+            ConversationMessage(role=m.get("role", "user"), content=m.get("content", ""))
+            for m in history
+        ],
     )

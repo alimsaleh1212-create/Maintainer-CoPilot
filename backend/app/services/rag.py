@@ -100,11 +100,15 @@ class RAGService:
             #    ("issue", "wiki") to DB-level source column values
             #    ("issue", "docs"). Pass None to disable filtering.
             source_filter = _translate_source_types(source_types)
+            # Lazy-import the reranker singleton so RAGService still works
+            # in environments without sentence-transformers (e.g. unit tests).
+            from app.rag.reranker import get_reranker
+
             retrieved_chunks = await self.retriever.retrieve(
                 query_variations=query_variations,
                 embedding_fn=embedder.embed,
                 db_session=db_session,
-                reranker=None,  # TODO: wire reranker when docker ready
+                reranker=get_reranker(),
                 top_k=top_k,
                 source_filter=source_filter,
             )

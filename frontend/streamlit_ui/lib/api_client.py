@@ -67,6 +67,16 @@ class APIClient:
         resp.raise_for_status()
         return resp.json()
 
+    def _put(self, path: str, json: Any = None) -> Any:
+        resp = httpx.put(
+            f"{self._base}{path}",
+            headers=self._headers(),
+            json=json,
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     # ------------------------------------------------------------------ auth endpoints
 
     def login(self, email: str, password: str) -> dict[str, Any]:
@@ -106,6 +116,14 @@ class APIClient:
             payload["rag_min_confidence"] = rag_min_confidence
         return dict(self._post("/chat", payload))
 
+    def list_conversations(self) -> list[dict[str, Any]]:
+        """Return the current user's conversations (newest first)."""
+        return list(self._get("/chat/conversations"))
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        """Return one conversation's title + history (server enforces ownership)."""
+        return dict(self._get(f"/chat/conversations/{conversation_id}"))
+
     # ------------------------------------------------------------------ widgets (admin)
 
     def list_widgets(self) -> list[dict[str, Any]]:
@@ -116,6 +134,12 @@ class APIClient:
 
     def delete_widget(self, widget_id: str) -> dict[str, Any]:
         return dict(self._delete(f"/widgets/{widget_id}"))
+
+    def update_widget(self, widget_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """PUT /widgets/{widget_id} — partial update of any of:
+        allowed_origins, greeting, theme, enabled_tools, enabled.
+        """
+        return dict(self._put(f"/widgets/{widget_id}", data))
 
     # ------------------------------------------------------------------ memory
 

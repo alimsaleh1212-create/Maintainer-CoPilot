@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.api.dependencies import WidgetServiceDep
@@ -130,6 +130,38 @@ async def list_widgets(
     """
     widgets = await widget_service.list_widgets(owner_id=current_user.id)
     return [WidgetResponse.model_validate(w) for w in widgets]
+
+
+class WidgetDiscoverResponse(BaseModel):
+    """Minimal public widget info for the demo host discovery call."""
+
+    public_widget_id: str | None = None
+
+
+@router.get("/discover", response_model=WidgetDiscoverResponse)
+async def discover_widget(
+    widget_service: WidgetServiceDep,
+    request: Request,
+) -> WidgetDiscoverResponse:
+    """Return the enabled widget whose allowed_origins lists the calling Origin.
+
+    Demo host pages call this from JavaScript so each page picks the widget
+    bound to its own origin (port 8090 / 8091) — otherwise both pages would
+    fetch the same widget and one would always get a CSP block.
+
+    Falls back to the most recent enabled widget when no Origin header is
+    present (e.g. a direct curl call).
+    """
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if origin:
+        # Strip the path component from a Referer header
+        from urllib.parse import urlparse
+
+        parsed = urlparse(origin)
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+    widget = await widget_service.first_enabled_widget(origin=origin)
+    return WidgetDiscoverResponse(public_widget_id=widget.public_widget_id if widget else None)
 
 
 @router.get("/{widget_id}/config", response_model=WidgetConfigResponse)

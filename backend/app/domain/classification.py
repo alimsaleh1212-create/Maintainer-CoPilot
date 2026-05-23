@@ -14,3 +14,11 @@ class ClassificationResult(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
     model_version: str
     latency_ms: float = Field(..., ge=0.0)
+    cascade_triggered: bool = Field(
+        default=False,
+        description="True when DistilBERT confidence was below threshold and the LLM was used instead",
+    )
+    cascade_model: str | None = Field(
+        default=None,
+        description="Name of the LLM used for cascade classification, or None if cascade was not triggered",
+    )

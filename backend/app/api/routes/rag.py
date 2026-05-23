@@ -24,8 +24,7 @@ class SearchRequest(BaseModel):
     source_types: list[SourceType] | None = Field(
         default=None,
         description=(
-            "Restrict retrieval to these source types. "
-            "Empty/None = both issues and wiki."
+            "Restrict retrieval to these source types. Empty/None = both issues and wiki."
         ),
     )
     min_citation_confidence: float = Field(
@@ -111,8 +110,6 @@ async def search(
             )
             for c in results.chunks
         ],
-        citations=[
-            CitationResponse(**cite.to_dict()) for cite in results.citations
-        ],
+        citations=[CitationResponse(**cite.to_dict()) for cite in results.citations],
         total_retrieved=results.total_retrieved,
     )

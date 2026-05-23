@@ -1,14 +1,22 @@
 # Local-dev overrides — NOT committed to production deploys.
 #
 # Hot-reload strategy:
-#   - Bind-mount only the source directories (app/, prompts/, scripts/, tests/)
-#     so code changes are immediately visible to the running process.
-#   - Use named volumes for .venv so the packages baked into the image are
-#     preserved and not overwritten by the host directory.
+#   - Bind-mount source dirs so code changes are immediately visible.
+#   - Named volumes for .venv so packages baked into the image are preserved.
 #   - When Python packages change (pyproject.toml / uv.lock), run:
 #       docker compose down -v && docker compose up -d --build
+#
+# Correct usage (auto-discovers this file when run from docker/):
+#   cd docker && docker compose up -d
+# Or from repo root with explicit files:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d
 
 services:
+  # ── migrate: bind-mount alembic so new migrations are visible without rebuild ──
+  migrate:
+    volumes:
+      - ../backend/alembic:/app/alembic
+
   api:
     volumes:
       - ../backend/app:/app/app
@@ -45,6 +53,15 @@ services:
       - --server.port=8501
       - --server.address=0.0.0.0
       - --server.runOnSave=true
+
+  # ── demo hosts: bind-mount HTML so edits appear without rebuild ───────────
+  host-allowed:
+    volumes:
+      - ../frontend/demo_host/allowed:/srv/allowed:ro
+
+  host-disallowed:
+    volumes:
+      - ../frontend/demo_host/disallowed:/srv/disallowed:ro
 
 volumes:
   api_dev_venv:

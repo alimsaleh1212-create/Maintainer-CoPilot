@@ -77,17 +77,35 @@
       </div>
     </div>
 
-    <pre><span class="cc">&lt;!-- Same embed snippet, different origin --&gt;</span>
+    <pre id="snippet-code"><span class="cc">&lt;!-- Same embed snippet, different origin (widget ID auto-discovered) --&gt;</span>
 &lt;script src="http://localhost:8000/widget.js"
-        data-widget-id="wgt_49595af3"
+        data-widget-id="…discovering…"
         data-api-host="http://localhost:8000"
         async&gt;&lt;/script&gt;</pre>
   </main>
   <footer>Maintainer's Copilot &middot; AIE Bootcamp Week 7 &middot; <strong>Disallowed</strong> origin demo</footer>
 
-  <script src="http://localhost:8000/widget.js"
-          data-widget-id="wgt_49595af3"
-          data-api-host="http://localhost:8000"
-          async></script>
+  <script>
+    (function () {
+      var API = "http://localhost:8000";
+      fetch(API + "/widgets/discover")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var wid = data.public_widget_id;
+          if (!wid) { console.warn("[Copilot] No enabled widget found."); return; }
+          // Update displayed snippet
+          var pre = document.getElementById("snippet-code");
+          if (pre) pre.innerHTML = '<span class="cc">&lt;!-- Same embed snippet, different origin --&gt;</span>\n&lt;script src="' + API + '/widget.js"\n        data-widget-id="' + wid + '"\n        data-api-host="' + API + '"\n        async&gt;&lt;/script&gt;';
+          // Inject loader — the CSP block fires here because this page is on port 8091
+          var s = document.createElement("script");
+          s.src = API + "/widget.js";
+          s.setAttribute("data-widget-id", wid);
+          s.setAttribute("data-api-host", API);
+          s.async = true;
+          document.body.appendChild(s);
+        })
+        .catch(function (e) { console.error("[Copilot] discover failed:", e); });
+    })();
+  </script>
 </body>
 </html>

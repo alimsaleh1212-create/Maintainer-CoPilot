@@ -155,9 +155,15 @@
 **Why reranking:**
 - Multi-query + hybrid may return 50+ candidates
 - Cross-encoder (trained on relevance pairs) orders by true match quality
-- ~10 ms overhead on 20 candidates; negligible vs retrieval latency
+- ~50–150 ms overhead per query on 20 candidates; the model is loaded once
 
-**Model choice:** bge-reranker-base (BAAI maintains both embedding + reranking suite; compatible embeddings)
+**Model choice:** bge-reranker-base (BAAI maintains both embedding + reranking suite; compatible embeddings).
+
+**Where it runs (architectural choice):** `model-server` container, not the API container. The model-server already has torch loaded for the DistilBERT classifier, so adding the reranker there is free. The API calls `POST /rerank {query, passages}` over the Docker network (~1 ms hop on the local bridge vs 50–150 ms model inference). This kept the **API image at 727 MB instead of 1.56 GB** (–833 MB) — torch / transformers / sentence-transformers stay where they belong: in the inference container, not the routing layer.
+
+**Failure mode:** If model-server returns 503 (model didn't load) or is unreachable, the rerank client returns an empty result and the hybrid retriever keeps its dense+sparse ordering. The user-visible call still succeeds — graceful degradation, not failure.
+
+**Rejected alternative — reranker in Ollama:** Our pinned `ollama:0.20.2` returns 404 on `/api/rerank`; that endpoint is experimental on post-0.5.x forks. Bumping Ollama just for rerank would invalidate the chat + embeddings paths we already trust.
 
 ---
 

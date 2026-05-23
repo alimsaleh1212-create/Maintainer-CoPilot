@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 import structlog
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
@@ -127,6 +128,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await engine.dispose()
         sys.exit(1)
 
+    # Cross-encoder rerank runs out-of-process in model-server (which already
+    # has torch loaded for the DistilBERT classifier). Probe model-server's
+    # /healthz to fail fast on misconfiguration; rerank itself is best-effort
+    # and the retriever handles 503 / network errors gracefully.
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as probe:
+            health = await probe.get(f"{settings.model_server_base_url}/healthz")
+        logger.info("model_server_probed", status=health.status_code)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("model_server_probe_failed", error=str(exc))
+
     # ------------------------------------------------------------------
     # 4. Redis
     # ------------------------------------------------------------------
@@ -209,6 +221,18 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,
+    )
+
+    # Allow the demo host pages (8090 / 8091) to fetch /widgets/discover and
+    # /widget.js cross-origin. The discover endpoint is public and returns only
+    # the widget ID, so "*" is safe here. Authenticated endpoints still require
+    # a valid JWT in the Authorization header.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+        expose_headers=["Content-Security-Policy"],
     )
 
     add_exception_handlers(app)

@@ -29,7 +29,12 @@ export async function sendChat(
     headers,
     body: JSON.stringify(body),
   });
-  if (!resp.ok) throw new Error(`Chat request failed: ${resp.status}`);
+  if (!resp.ok) {
+    // Surface 401 specifically so the UI can prompt the user to sign in.
+    const err = new Error(`Chat request failed: ${resp.status}`);
+    (err as Error & { status?: number }).status = resp.status;
+    throw err;
+  }
   return resp.json() as Promise<ChatResponse>;
 }
 
@@ -38,7 +43,10 @@ export async function loginUser(
   password: string,
 ): Promise<{ access_token: string }> {
   const form = new URLSearchParams({ username: email, password });
-  const resp = await fetch(`${_apiHost}/auth/jwt/login`, { method: "POST", body: form });
-  if (!resp.ok) throw new Error("Login failed");
+  const resp = await fetch(`${_apiHost}/auth/login`, { method: "POST", body: form });
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error(`Login failed (${resp.status}): ${body.slice(0, 200)}`);
+  }
   return resp.json() as Promise<{ access_token: string }>;
 }

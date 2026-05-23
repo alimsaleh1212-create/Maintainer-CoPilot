@@ -9,6 +9,7 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.rag_chunk import RagChunkCreate
 from app.rag.chunking import Chunk, IssueChunker, MarkdownChunker
 from app.rag.embeddings import EmbeddingModel
 
@@ -70,9 +71,7 @@ class CorpusIngestor:
             candidate.append(chunk)
 
         # Skip chunks already in the DB — saves the slow embed roundtrip
-        existing = await self._existing_chunk_ids(
-            db_session, [c.chunk_id for c in candidate]
-        )
+        existing = await self._existing_chunk_ids(db_session, [c.chunk_id for c in candidate])
         pending = [c for c in candidate if c.chunk_id not in existing]
         stats["already_present"] = len(candidate) - len(pending)
         logger.info(
@@ -120,9 +119,7 @@ class CorpusIngestor:
                 logger.exception("corpus_ingest.wiki_failed", file=file_path, error=str(exc))
                 stats["errors"] += 1
 
-        existing = await self._existing_chunk_ids(
-            db_session, [c.chunk_id for c in candidate]
-        )
+        existing = await self._existing_chunk_ids(db_session, [c.chunk_id for c in candidate])
         pending = [c for c in candidate if c.chunk_id not in existing]
         stats["already_present"] = len(candidate) - len(pending)
         logger.info(
@@ -153,9 +150,9 @@ class CorpusIngestor:
         """
         if not chunk_ids:
             return set()
-        stmt = text(
-            "SELECT chunk_id FROM rag_chunks WHERE chunk_id = ANY(:ids)"
-        ).bindparams(ids=chunk_ids)
+        stmt = text("SELECT chunk_id FROM rag_chunks WHERE chunk_id = ANY(:ids)").bindparams(
+            ids=chunk_ids
+        )
         rows = (await db_session.execute(stmt)).fetchall()
         return {row.chunk_id for row in rows}
 
@@ -207,9 +204,21 @@ class CorpusIngestor:
         chunk: Chunk,
         embedding: list[float],
     ) -> None:
-        """Idempotent insert (ON CONFLICT chunk_id DO UPDATE)."""
+        """Idempotent insert (ON CONFLICT chunk_id DO UPDATE).
+
+        Validates the chunk through RagChunkCreate before writing so the
+        domain model is the authoritative boundary between chunking and storage.
+        """
+        validated = RagChunkCreate(
+            chunk_id=chunk.chunk_id,
+            text=chunk.text,
+            source=chunk.source,
+            parent_id=chunk.parent_id,
+            parent_text=chunk.parent_text,
+            metadata=chunk.metadata,
+        )
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
-        metadata_json = json.dumps(_serialize_metadata(chunk.metadata))
+        metadata_json = json.dumps(_serialize_metadata(validated.metadata))
         # tsvector uses the chunk's own text — search hits the same content
         # the LLM will eventually see.
         stmt = text(
@@ -226,14 +235,14 @@ class CorpusIngestor:
             "  parent_id = EXCLUDED.parent_id, "
             "  parent_text = EXCLUDED.parent_text"
         ).bindparams(
-            chunk_id=chunk.chunk_id,
-            text=chunk.text,
-            source=chunk.source,
+            chunk_id=validated.chunk_id,
+            text=validated.text,
+            source=validated.source,
             embedding=embedding_str,
-            tsvector_text=chunk.text,
+            tsvector_text=validated.text,
             metadata=metadata_json,
-            parent_id=chunk.parent_id,
-            parent_text=chunk.parent_text,
+            parent_id=validated.parent_id,
+            parent_text=validated.parent_text,
         )
         await db_session.execute(stmt)
         await db_session.commit()

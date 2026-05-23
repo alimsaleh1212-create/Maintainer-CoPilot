@@ -55,6 +55,11 @@ class Settings(BaseModel):
     ollama_chat_model: str = Field(default="gemma3:4b")
     ollama_embed_model: str = Field(default="nomic-embed-text")
 
+    # --- Cascading classifier -------------------------------------------------
+    # When DistilBERT confidence < this value the service automatically
+    # re-classifies using the LLM (Gemini).  Set to 0.0 to disable cascade.
+    classify_cascade_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

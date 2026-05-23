@@ -39,6 +39,8 @@ dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0.0",
+    "playwright>=1.60.0",
+    "pytest-playwright>=0.8.0",
 ]
 train = [
     "torch>=2.12.0",
@@ -48,6 +50,20 @@ train = [
 model-server = [
     "torch>=2.12.0",
     "transformers>=5.8.1",
+    # Cross-encoder reranker for the RAG pipeline. Lives here (not in the
+    # main app deps) so the API container stays light — model-server is the
+    # only process that needs torch.
+    "sentence-transformers>=5.5.1",
+]
+eval = [
+    # RAGAS for RAG faithfulness + answer relevancy evaluation.
+    # Uses langchain-openai to drive the Gemini LLM via its OpenAI-compatible endpoint.
+    # Uses langchain-ollama for embeddings (Gemini's OpenAI-compat endpoint returns 501 for embeddings).
+    "ragas>=0.2.6",
+    "langchain-openai>=0.3.0",
+    "langchain-ollama>=0.3.0",
+    "datasets>=3.4.0",
+    "pandas>=2.0.0",
 ]
 
 # Use CPU-only PyTorch wheel to avoid downloading 2GB+ of CUDA packages.

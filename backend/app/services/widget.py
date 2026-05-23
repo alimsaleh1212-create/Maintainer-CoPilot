@@ -67,6 +67,8 @@ class WidgetService:
             theme = {}
         if enabled_tools is None:
             enabled_tools = ["classify", "ner", "summarize", "rag_search"]
+        # Normalise origins: strip trailing slashes so CSP frame-ancestors matches correctly.
+        allowed_origins = [o.rstrip("/") for o in allowed_origins]
 
         async with self._session_factory() as session:
             widget = Widget(
@@ -192,6 +194,38 @@ class WidgetService:
             fields=list(update_data.keys()),
         )
         return widget
+
+    async def first_enabled_widget(self, origin: str | None = None) -> Widget | None:
+        """Return the most recently created enabled widget for ``origin``.
+
+        Used by the public ``GET /widgets/discover`` demo endpoint so each
+        demo host page picks the widget whose ``allowed_origins`` lists it
+        (rather than any random enabled widget — that produced CSP blocks
+        when multiple host pages existed).
+
+        When ``origin`` is None, falls back to the most recent enabled widget
+        across all origins so single-widget setups still work.
+
+        Returns:
+            Most recent enabled Widget matching ``origin``, or None.
+        """
+        async with self._session_factory() as session:
+            stmt = (
+                select(Widget)
+                .where(Widget.enabled == True)  # noqa: E712
+                .order_by(Widget.created_at.desc())
+            )
+            result = await session.execute(stmt)
+            widgets = list(result.scalars())
+            if not widgets:
+                return None
+            if origin is None:
+                return widgets[0]
+            normalized = origin.rstrip("/")
+            for w in widgets:
+                if normalized in (w.allowed_origins or []):
+                    return w
+            return None
 
     async def list_widgets(self, owner_id: uuid.UUID) -> list[Widget]:
         """Return all widgets owned by a user, newest first.

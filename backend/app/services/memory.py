@@ -31,6 +31,15 @@ def _history_key(conversation_id: str) -> str:
     return f"conv:{conversation_id}:history"
 
 
+def _conv_meta_key(conversation_id: str) -> str:
+    return f"conv:{conversation_id}:meta"
+
+
+def _user_conv_index_key(user_id: uuid.UUID) -> str:
+    """Sorted set of a user's conversation IDs (score = updated_at unix ts)."""
+    return f"user:{user_id}:conversations"
+
+
 class MemoryService:
     """Short-term (Redis) and long-term (pgvector) memory for conversations.
 
@@ -104,6 +113,85 @@ class MemoryService:
         """
         await self._redis.delete(_history_key(conversation_id))
         logger.info("memory.history_cleared", conversation_id=conversation_id)
+
+    # ------------------------------------------------------------------
+    # Conversation index per user (multi-tenant isolation)
+    # ------------------------------------------------------------------
+
+    async def verify_conversation_owner(self, conversation_id: str, user_id: uuid.UUID) -> bool:
+        """Return True if the conversation has no recorded owner OR is owned by user_id.
+
+        Conversations created before this index existed have no meta record; we
+        treat those as "claim on first touch" so legacy sessions don't break.
+        """
+        meta = await self._redis.hgetall(_conv_meta_key(conversation_id))  # type: ignore[misc]
+        if not meta:
+            return True
+        owner = meta.get("user_id", "")
+        return str(owner) == str(user_id)
+
+    async def touch_conversation(
+        self,
+        conversation_id: str,
+        user_id: uuid.UUID,
+        first_message: str | None = None,
+    ) -> None:
+        """Mark this conversation as owned by user_id and bump its updated_at.
+
+        Idempotent — safe to call on every chat turn. Sets the title from the
+        first user message when one isn't already stored.
+        """
+        import time
+
+        meta_key = _conv_meta_key(conversation_id)
+        index_key = _user_conv_index_key(user_id)
+        now = time.time()
+
+        existing = await self._redis.hgetall(meta_key)  # type: ignore[misc]
+        updates: dict[str, str] = {
+            "user_id": str(user_id),
+            "updated_at": str(now),
+        }
+        if "created_at" not in existing:
+            updates["created_at"] = str(now)
+        if first_message and not existing.get("title"):
+            # Use the first user message (truncated) as the conversation title.
+            title = first_message.strip().replace("\n", " ")
+            updates["title"] = title[:80] if len(title) <= 80 else title[:77] + "..."
+
+        await self._redis.hset(meta_key, mapping=updates)  # type: ignore[misc]
+        await self._redis.expire(meta_key, _HISTORY_TTL_SECONDS * 30)  # 30 days
+        await self._redis.zadd(index_key, {conversation_id: now})  # type: ignore[misc]
+
+    async def list_user_conversations(
+        self, user_id: uuid.UUID, limit: int = 50
+    ) -> list[dict[str, str]]:
+        """Return the user's recent conversations, newest first.
+
+        Each entry has ``{conversation_id, title, created_at, updated_at}``.
+        Conversations whose meta has expired are silently dropped from the
+        returned list (and from the index on demand).
+        """
+        # zrevrange returns newest-first
+        ids: list[str] = await self._redis.zrevrange(  # type: ignore[misc]
+            _user_conv_index_key(user_id), 0, limit - 1
+        )
+        out: list[dict[str, str]] = []
+        for cid in ids:
+            meta = await self._redis.hgetall(_conv_meta_key(cid))  # type: ignore[misc]
+            if not meta:
+                # Expired meta — drop from index too so the list stays clean.
+                await self._redis.zrem(_user_conv_index_key(user_id), cid)  # type: ignore[misc]
+                continue
+            out.append(
+                {
+                    "conversation_id": cid,
+                    "title": meta.get("title", "New conversation"),
+                    "created_at": meta.get("created_at", ""),
+                    "updated_at": meta.get("updated_at", ""),
+                }
+            )
+        return out
 
     # ------------------------------------------------------------------
     # Long-term episodic memory (pgvector)

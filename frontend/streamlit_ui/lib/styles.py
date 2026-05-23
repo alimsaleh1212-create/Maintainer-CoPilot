@@ -17,10 +17,71 @@ html, body, [class*="css"] {
     background: #0f172a !important;
 }
 
-/* Hide default header / footer */
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
-header { visibility: hidden; }
+/* ── Header chrome ───────────────────────────────────────────
+ * Streamlit 1.40+ puts BOTH sidebar controls inside `stToolbar`:
+ *   - `stSidebarCollapseButton` (X, when sidebar is OPEN)
+ *   - `stExpandSidebarButton`   (»  arrow, when sidebar is CLOSED)
+ * Previous versions of this stylesheet hid `stToolbar` entirely, which
+ * is why the » arrow vanished once the user collapsed the sidebar.
+ * The fix: keep the toolbar rendered, hide only the deploy / main-menu
+ * children we don't want, and pin both sidebar controls to a known
+ * fixed position so they remain reachable no matter what. */
+footer { display: none !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+[data-testid="stAppDeployButton"] { display: none !important; }
+[data-testid="stMainMenu"] { display: none !important; }
+
+header[data-testid="stHeader"] {
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+[data-testid="stToolbar"] {
+    background: transparent !important;
+    pointer-events: none !important; /* let clicks through except on our buttons */
+}
+[data-testid="stToolbar"] button {
+    pointer-events: auto !important; /* re-enable on the sidebar buttons themselves */
+}
+
+/* Pin both sidebar controls to the top-left so they cannot get clipped
+ * by any other rule, and style them as visible dark-tech chips. */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stExpandSidebarButton"] {
+    position: fixed !important;
+    top: 0.6rem !important;
+    left: 0.6rem !important;
+    z-index: 999999 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background: #1e293b !important;
+    border: 1px solid #334155 !important;
+    border-radius: 8px !important;
+    padding: 2px !important;
+    transition: background 0.15s, border-color 0.15s !important;
+    pointer-events: auto !important;
+}
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stExpandSidebarButton"] button {
+    background: transparent !important;
+    border: none !important;
+    pointer-events: auto !important;
+}
+[data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"],
+[data-testid="stExpandSidebarButton"] [data-testid="stIconMaterial"] {
+    color: #e2e8f0 !important;
+    font-size: 22px !important;
+}
+[data-testid="stSidebarCollapseButton"]:hover,
+[data-testid="stExpandSidebarButton"]:hover {
+    background: #22c55e15 !important;
+    border-color: #22c55e60 !important;
+}
+[data-testid="stSidebarCollapseButton"]:hover [data-testid="stIconMaterial"],
+[data-testid="stExpandSidebarButton"]:hover [data-testid="stIconMaterial"] {
+    color: #22c55e !important;
+}
 
 /* ── Sidebar ──────────────────────────────────────────────── */
 [data-testid="stSidebar"] {

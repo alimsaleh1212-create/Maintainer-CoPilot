@@ -173,13 +173,13 @@ class HybridRetriever:
         if source_filter:
             where_clause = "WHERE source = ANY(:sources) "
             params["sources"] = source_filter
-        stmt = text(
-            "SELECT id, chunk_id, text, source, "
-            "       1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
-            f"FROM rag_chunks {where_clause}"
-            "ORDER BY embedding <=> CAST(:query_embedding AS vector) "
-            "LIMIT :top_k"
-        ).bindparams(**params)
+        # ``where_clause`` is a static literal chosen by an internal branch
+        # ("" or "WHERE source = ANY(:sources) "); no user input interpolated.
+        select_clause = "SELECT id, chunk_id, text, source, "
+        score_clause = "1 - (embedding <=> CAST(:query_embedding AS vector)) as score "
+        order_limit = "ORDER BY embedding <=> CAST(:query_embedding AS vector) LIMIT :top_k"
+        sql = f"{select_clause} {score_clause} FROM rag_chunks {where_clause}{order_limit}"  # noqa: S608
+        stmt = text(sql).bindparams(**params)
 
         results = await db_session.execute(stmt)
         rows = results.fetchall()
@@ -230,15 +230,16 @@ class HybridRetriever:
         if source_filter:
             where_extra = "AND source = ANY(:sources) "
             params["sources"] = source_filter
-        stmt = text(
-            "SELECT id, chunk_id, text, source, "
-            "       ts_rank_cd(tsvector, plainto_tsquery('english', :query)) as score "
-            "FROM rag_chunks "
-            "WHERE tsvector @@ plainto_tsquery('english', :query) "
-            f"{where_extra}"
-            "ORDER BY score DESC "
-            "LIMIT :top_k"
-        ).bindparams(**params)
+        # ``where_extra`` is a static literal from an internal branch
+        # ("" or "AND source = ANY(:sources) "); no user input interpolated.
+        select_clause = "SELECT id, chunk_id, text, source, "
+        score_clause = "ts_rank_cd(tsvector, plainto_tsquery('english', :query)) as score "
+        where_base = "WHERE tsvector @@ plainto_tsquery('english', :query) "
+        order_limit = "ORDER BY score DESC LIMIT :top_k"
+        sql = (
+            f"{select_clause} {score_clause} FROM rag_chunks {where_base}{where_extra}{order_limit}"  # noqa: S608
+        )
+        stmt = text(sql).bindparams(**params)
 
         results = await db_session.execute(stmt)
         rows = results.fetchall()
@@ -345,24 +346,37 @@ class HybridRetriever:
         candidates: list[RetrievedChunk],
         reranker: Any,
     ) -> list[RetrievedChunk]:
-        """Rerank candidates using cross-encoder.
+        """Rerank candidates using a cross-encoder.
+
+        Calls ``reranker.rerank(query, passages)`` which returns
+        ``[(index, score), ...]`` sorted by score desc. We then attach the
+        rerank score to each chunk and resort the list. The cross-encoder
+        score replaces the hybrid score as the final ranking signal because
+        BGE-reranker is far more accurate at semantic relevance than the
+        dense+sparse linear combination.
 
         Args:
-            query: Original query
-            candidates: Chunks to rerank
-            reranker: Cross-encoder model
+            query: Original user query (not the rewritten variations).
+            candidates: Hybrid top-N to rerank.
+            reranker: Object exposing async ``rerank(query, list[str]) -> list[(int, float)]``.
 
         Returns:
-            Reranked chunks
+            Candidates resorted by cross-encoder score (descending).
         """
         if not candidates:
             return candidates
 
         logger.info("retrieval.reranking", num_candidates=len(candidates))
+        passages = [c.text for c in candidates]
+        ranked = await reranker.rerank(query, passages)
 
-        # TODO: Use BAAI/bge-reranker-base
-        # scores = reranker.rank(query, [c.text for c in candidates])
-        # Update candidates with rerank_score and resort
+        for idx, score in ranked:
+            candidates[idx].rerank_score = score
+            candidates[idx].score = score
+        candidates.sort(key=lambda c: c.rerank_score or 0.0, reverse=True)
 
-        logger.info("retrieval.reranking_placeholder")
-        return candidates  # Placeholder: return as-is
+        logger.info(
+            "retrieval.reranking_complete",
+            top_rerank_score=candidates[0].rerank_score if candidates else None,
+        )
+        return candidates

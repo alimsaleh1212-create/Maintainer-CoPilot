@@ -142,7 +142,7 @@ class MarkdownChunker:
         full_text = text
         # Page title from H1 (or filename)
         h1_match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
-        page_title = (h1_match.group(1).strip() if h1_match else _filename_to_title(file_path))
+        page_title = h1_match.group(1).strip() if h1_match else _filename_to_title(file_path)
 
         h2_sections = self._split_by_header(text, level=2)
         chunks: list[Chunk] = []

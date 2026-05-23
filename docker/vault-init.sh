@@ -68,9 +68,10 @@ while IFS= read -r line || [ -n "$line" ]; do
 
   # Map .env key (UPPER_SNAKE) → Vault key (lower_snake). Allowlist only.
   case "$key" in
-    GEMINI_API_KEY)      vault_key="gemini_api_key" ;;
-    GEMINI_MODEL)        vault_key="gemini_model" ;;
-    OLLAMA_CHAT_MODEL)   vault_key="ollama_chat_model" ;;
+    GEMINI_API_KEY)        vault_key="gemini_api_key" ;;
+    GEMINI_MODEL)          vault_key="gemini_model" ;;
+    GEMINI_JUDGMENT_MODEL) vault_key="gemini_judgment_model" ;;
+    OLLAMA_CHAT_MODEL)     vault_key="ollama_chat_model" ;;
     OLLAMA_EMBED_MODEL)  vault_key="ollama_embed_model" ;;
     JWT_SIGNING_KEY)     vault_key="jwt_signing_key" ;;
     MINIO_ACCESS_KEY)    vault_key="minio_access_key" ;;
@@ -110,6 +111,10 @@ ARGS="$ARGS database_url=postgresql+asyncpg://copilot:${_POSTGRES_PASSWORD}@db:5
 case "$ARGS" in
   *gemini_model=*)        ;;
   *) ARGS="$ARGS gemini_model=gemini-2.0-flash" ;;
+esac
+case "$ARGS" in
+  *gemini_judgment_model=*) ;;
+  *) ARGS="$ARGS gemini_judgment_model=gemini-2.5-flash" ;;
 esac
 case "$ARGS" in
   *ollama_chat_model=*)   ;;
